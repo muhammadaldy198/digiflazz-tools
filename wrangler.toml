@@ -1,0 +1,9 @@
+name = "digiflazz-tools"
+main = "src/index.ts"
+compatibility_date = "2026-09-26"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "digiflazz-tools-db"
+database_id = "2ccab1ea-425a-40df-b609-b6988bb9fba6"
+migrations_dir = "migrations"
