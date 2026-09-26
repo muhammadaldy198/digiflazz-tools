@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Digi Tools — Auto Select Seller
 // @namespace    https://tools.lfamiliastore.my.id/
-// @version      1.3.0
+// @version      1.4.0
 // @description  Pilih seller langsung di halaman produk Digiflazz. Sesi tetap di browser.
 // @match        https://member.digiflazz.com/*
 // @run-at       document-end
@@ -163,26 +163,89 @@
     for(const vm of roots)walk(vm);
   }
   const autoCodes=new WeakMap();
-  function fillNewCode() {
-    if(!settings.autoServiceCode)return;
-    for(const dialog of document.querySelectorAll(".el-dialog,.modal,.modal-dialog")) {
-      if(!dialog.getClientRects().length || !/tambah|buat|add/i.test(str(dialog.querySelector(".el-dialog__title,.modal-title")?.textContent)))continue;
-      const label=[...dialog.querySelectorAll("label")].find(x=>/kode (produk|layanan)|sku buyer/i.test(str(x.textContent)));
-      const field=label?.closest(".el-form-item,.form-group")?.querySelector("input") || dialog.querySelector('input[name="buyer_sku_code"],input[placeholder*="Kode Produk"]');
-      if(!field || field.value && field.value!==autoCodes.get(dialog))continue;
-      const game=dialog.querySelector('input[name="game"],input[name="brand"],input[name="category"]')?.value || str(dialog.querySelector('[data-game-name]')?.getAttribute('data-game-name'));
-      const product=dialog.querySelector('input[name="product"],input[name="product_name"],input[name="name"]')?.value || str(dialog.querySelector('[data-product-name]')?.getAttribute('data-product-name'));
-      const code=serviceCode(game,product);
-      if(!code || code===autoCodes.get(dialog) && field.value===code)continue;
-      const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")?.set;
-      if(!setter)continue;
-      setter.call(field,code);
-      field.dispatchEvent(new Event("input",{bubbles:true}));
-      field.dispatchEvent(new Event("change",{bubbles:true}));
-      autoCodes.set(dialog,code);
-      update("Kode layanan "+code+" diisi dari nama game dan nominal.");
+  function fieldValue(scope, selectors) {
+    for(const selector of selectors) {
+      const el=scope.querySelector(selector);
+      if(!el)continue;
+      const value=str(el.value ?? el.getAttribute?.("data-game-name") ?? el.getAttribute?.("data-product-name") ?? el.textContent);
+      if(value)return value;
     }
+    return "";
   }
+  function selectedText(scope, names) {
+    for(const name of names) {
+      const select=scope.querySelector('select[name="'+name+'"]');
+      const value=str(select?.selectedOptions?.[0]?.textContent || select?.value);
+      if(value)return value;
+    }
+    return "";
+  }
+  function codeFields() {
+    const found=new Set(document.querySelectorAll([
+      'input[name="buyer_sku_code"]',
+      'input[name="buyerSkuCode"]',
+      'input[placeholder*="Kode Produk"]',
+      'input[placeholder*="kode produk"]',
+      'input[placeholder*="SKU Buyer"]',
+      'input[placeholder*="SKU buyer"]',
+      'input[placeholder*="Kode Layanan"]'
+    ].join(",")));
+    for(const label of document.querySelectorAll("label")) {
+      if(!/kode\s*(produk|layanan)|sku\s*buyer/i.test(str(label.textContent)))continue;
+      const box=label.closest(".el-form-item,.form-group,.form-field,.field") || label.parentElement;
+      const input=box?.querySelector("input");
+      if(input)found.add(input);
+    }
+    return [...found];
+  }
+  function inferCodeParts(field) {
+    const scope=field.closest(".el-dialog,.modal,.modal-dialog,form,.el-form,.drawer,.el-drawer,.card,tr") || field.parentElement || document;
+    const game=fieldValue(scope,[
+      'input[name="game"]','input[name="brand"]','input[name="category"]',
+      '[data-game-name]','.game-name','.brand-name','.category-name'
+    ]) || selectedText(scope,["game","brand","category"]);
+    const product=fieldValue(scope,[
+      'input[name="product"]','input[name="product_name"]','input[name="productName"]',
+      'input[name="nominal"]','input[name="denomination"]','input[name="name"]',
+      '[data-product-name]','.product-name','.product_name','.nominal-name','.denomination-name'
+    ]) || selectedText(scope,["product","product_name","nominal","denomination"]);
+    return {scope,game,product};
+  }
+  function setNativeValue(field,value) {
+    const proto=field instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
+    const setter=Object.getOwnPropertyDescriptor(proto,"value")?.set;
+    if(!setter)return false;
+    setter.call(field,value);
+    field.dispatchEvent(new Event("input",{bubbles:true}));
+    field.dispatchEvent(new Event("change",{bubbles:true}));
+    return true;
+  }
+  function fillAllCodes(showStatus=false) {
+    if(!settings.autoServiceCode)return {filled:0,unresolved:0,kept:0,total:0};
+    let filled=0,unresolved=0,kept=0;
+    const fields=codeFields();
+    for(const field of fields) {
+      if(!field || field.disabled || field.readOnly)continue;
+      const {scope,game,product}=inferCodeParts(field);
+      const previous=autoCodes.get(field);
+      if(field.value && field.value!==previous){kept++;continue}
+      const code=serviceCode(game,product);
+      if(!code){unresolved++;continue}
+      if(field.value===code){autoCodes.set(field,code);continue}
+      if(!setNativeValue(field,code)){unresolved++;continue}
+      autoCodes.set(field,code);
+      if(scope && scope!==document)autoCodes.set(scope,code);
+      filled++;
+    }
+    if(showStatus) {
+      if(filled) update(filled+" SKU diisi otomatis. "+(unresolved?unresolved+" belum terbaca; buka/pilih produk lalu coba lagi.":"Semua field yang terbaca sudah terisi."));
+      else if(fields.length===0) update("Belum ada field SKU di halaman ini. Buka Tambah Produk; SKU akan terisi otomatis tanpa ketik satu-satu.");
+      else if(unresolved) update("Ada "+unresolved+" field SKU, tetapi nama game/nominal belum terbaca. Pilih produknya dulu; kode akan muncul otomatis.");
+      else update("Semua SKU yang terbaca sudah terisi.");
+    }
+    return {filled,unresolved,kept,total:fields.length};
+  }
+  function fillNewCode() { return fillAllCodes(false); }
   function panel() {
     if(document.getElementById("digi-tools-auto-seller"))return;
     const host=document.createElement("div");host.id="digi-tools-auto-seller";
@@ -207,12 +270,12 @@
       <label><input id="fill" type="checkbox"> Isi max price saat seller terpilih</label>
       <label for="offset">Tambahan max price untuk semua produk (Rp)</label><input id="offset" type="number" min="0" placeholder="1000">
       <p>Contoh harga seller Rp15.000 + tambahan Rp1.000 = max price Rp16.000.</p>
-      <label><input id="code" type="checkbox"> Isi kode dari nama game + jumlah nominal</label>
-      <div class="row"><label for="code-game">Nama game<input id="code-game" placeholder="Mobile Legends"></label><label for="code-product">Nominal<input id="code-product" placeholder="5 Diamond"></label></div>
-      <button id="make-code" type="button">Buat kode</button> <button id="copy-code" type="button" disabled>Salin</button> <strong id="code-result"></strong>
+      <label><input id="code" type="checkbox"> Buat SKU otomatis untuk semua produk</label>
+      <p><strong>Tidak perlu isi SKU satu-satu.</strong> Saat form produk muncul dan nama game + nominal terbaca, kode langsung dibuat: Mobile Legends 5 Diamond → ML5, Free Fire 1000 Diamond → FF1000.</p>
+      <button id="fill-all-codes" type="button">⚡ Isi semua SKU di halaman</button>
       <label for="preferred">Seller prioritas (pisah koma)</label><textarea id="preferred"></textarea>
       <label for="blocked">Seller diblokir (pisah koma)</label><textarea id="blocked"></textarea>
-      <div id="status" class="status" role="status">Auto Seller v1.3 aktif. Menunggu halaman Produk…</div>
+      <div id="status" class="status" role="status">Auto Seller v1.4 aktif. SKU massal siap; buka Produk/Tambah Produk.</div>
     </div><button class="bubble" id="toggle" aria-label="Buka pengaturan auto seller">⚡ Auto Seller</button>`;
     const get=id=>ui.getElementById(id);
     get("enabled").checked=settings.enabled;
@@ -227,18 +290,7 @@
     get("blocked").value=settings.blocked;
     status=message=>{get("status").textContent=message};
     get("toggle").onclick=()=>get("box").classList.toggle("open");
-    get("make-code").onclick=()=>{
-      const code=serviceCode(get("code-game").value,get("code-product").value);
-      get("code-result").textContent=code||"Isi game dan nominal angka";
-      get("copy-code").disabled=!code;
-      if(code)update("Kode "+code+" dibuat dari nama game dan nominal; salin untuk dipakai di Digiflazz.");
-    };
-    get("copy-code").onclick=async()=>{
-      const code=get("code-result").textContent;
-      if(!/^[A-Z]{1,5}\d+$/.test(code))return;
-      try {await navigator.clipboard.writeText(code);update("Kode "+code+" disalin.")}
-      catch {update("Gagal menyalin. Pilih teks kode "+code+" secara manual.")}
-    };
+    get("fill-all-codes").onclick=()=>fillAllCodes(true);
     ui.addEventListener("change",()=>{
       settings={enabled:get("enabled").checked,saveMode:get("mode").value,minRating:Math.min(5,Math.max(0,Number(get("rating").value)||0)),minReviews:Math.max(0,Number(get("reviews").value)||0),priceCap:Math.max(0,Number(get("cap").value)||0),autoFillMaxPrice:get("fill").checked,maxPriceOffset:Math.min(1000000000,Math.max(0,Math.trunc(Number(get("offset").value)||0))),autoServiceCode:get("code").checked,preferred:get("preferred").value,blocked:get("blocked").value};
       localStorage.setItem(KEY,JSON.stringify(settings));update("Pengaturan tersimpan di browser ini.");
