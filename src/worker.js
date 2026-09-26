@@ -282,7 +282,8 @@ async function scan(env, reason = "manual") {
 function rank(product, rows, prefs, rule, config, zone) {
   const blocked = new Set(prefs.filter(p=>p.mode==="blocked").map(p=>p.seller_name.toLowerCase()));
   const preferred = new Set(prefs.filter(p=>p.mode==="preferred").map(p=>p.seller_name.toLowerCase()));
-  const unhealthy = !product.seller_name || !product.seller_active || (product.max_price > 0 && product.price > product.max_price) || (!product.unlimited_stock && product.stock === 0);
+  const hasHealthState = Object.prototype.hasOwnProperty.call(product,"seller_name") || Object.prototype.hasOwnProperty.call(product,"seller_active") || Object.prototype.hasOwnProperty.call(product,"stock");
+  const unhealthy = hasHealthState && (!product.seller_name || product.seller_active === 0 || (product.max_price > 0 && product.price > product.max_price) || (!product.unlimited_stock && product.stock === 0));
   const max = Math.min(...[rule?.max_price, unhealthy ? 0 : product.max_price, config.priceCap].filter(x=>Number(x)>0).map(Number), Infinity);
   const minRating = rule?.min_rating ?? config.minRating;
   return rows.map(x => {
@@ -358,7 +359,7 @@ function serviceCode(game,product) {
   if(!prefix||!Number.isSafeInteger(value)||value<1)return null;
   return prefix+String(value);
 }
-function changedProduct(current, choice, preserveMaxPrice=true, maxPriceOffset=0) {
+function changedProduct(current, choice, preserveMaxPrice=true, maxPriceOffset=0, preserveHigherMax=false) {
   const updated = { ...current };
   for (const [field, value] of Object.entries({
     seller:choice.seller,seller_sku_id:choice.id ?? choice.seller_sku_id,seller_sku_id_int:choice.id_int ?? choice.seller_sku_id_int,
@@ -373,7 +374,7 @@ function changedProduct(current, choice, preserveMaxPrice=true, maxPriceOffset=0
   if (!preserveMaxPrice) {
     const max=Number(choice.price)+Number(maxPriceOffset);
     if(!Number.isSafeInteger(max)||max<1||max>1000000000) throw Error("Harga maksimum hasil penambahan tidak valid.");
-    updated.max_price=Math.max(Number(updated.max_price)||0,max);
+    updated.max_price=preserveHigherMax?Math.max(Number(updated.max_price)||0,max):max;
   }
   return updated;
 }
@@ -398,7 +399,7 @@ async function switchSeller(env, sku, sellerId, reason) {
   try {
     // Set before the network call: a lost response may still mean Digiflazz saved the change.
     sent=true;
-    await remoteSave(env,changedProduct(current,choice,config.preserveMaxPrice && !config.autoFillMaxPrice,config.maxPriceOffset));
+    await remoteSave(env,changedProduct(current,choice,config.preserveMaxPrice && !config.autoFillMaxPrice,config.maxPriceOffset,config.preserveMaxPrice && config.autoFillMaxPrice));
     const verified=await freshProduct(env,sku);
     if (String(verified.seller_sku_id)!==sellerId) throw Error("Respons simpan diterima, tetapi seller baru belum terkonfirmasi.");
     await env.DB.batch([
