@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Digi Tools — Auto Select Seller
 // @namespace    https://tools.lfamiliastore.my.id/
-// @version      1.4.0
+// @version      1.5.0
 // @description  Pilih seller langsung di halaman produk Digiflazz. Sesi tetap di browser.
 // @match        https://member.digiflazz.com/*
 // @run-at       document-end
@@ -100,12 +100,6 @@
     if(!value)return value;
     try { return value.wrappedJSObject || value; } catch { return value; }
   }
-  function expose(fn,target) {
-    if(typeof exportFunction==="function") {
-      try { return exportFunction(fn,target); } catch {}
-    }
-    return fn;
-  }
   function vueOf(element) {
     if(!element)return null;
     try {
@@ -113,39 +107,19 @@
       return unwrap(raw?.__vue__ || element.__vue__) || null;
     } catch { return null; }
   }
+  // IMPORTANT: never replace Digiflazz's fetchSellers/click handler.
+  // We only observe the Vue state after Digiflazz itself opens the seller dialog.
   function patch(vm) {
     vm=unwrap(vm);
-    let sellers;
-    try { sellers=unwrap(vm?.sellers); } catch { sellers=null; }
-    if(!vm || vm.__digiToolsPatched || typeof vm.fetchSellers!=="function" || typeof vm.selectSeller!=="function" || !Array.isArray(sellers))return;
-    vm.__digiToolsPatched=true;
-    const original=vm.fetchSellers;
-    const replacement=function(product) {
-      const self=unwrap(this)||vm, rawProduct=unwrap(product);
-      const result=original.apply(self,arguments);
-      if(!settings.enabled)return result;
-      update("Memeriksa seller untuk "+str(rawProduct?.code||rawProduct?.product||"produk")+"…");
-      let attempts=0;
-      const wait=()=>{
-        if(!settings.enabled || self._isDestroyed)return;
-        let current,list;
-        try { current=unwrap(self.currentEditted);list=unwrap(self.sellers); } catch {}
-        if(current===rawProduct && self.dialogSeller && !self.fetchingSellers && Array.isArray(list)) {
-          handle(self,rawProduct);return;
-        }
-        if(++attempts<100)setTimeout(wait,100);
-        else update("Seller belum tersedia. Pilih manual jika Digiflazz berubah.");
-      };
-      setTimeout(wait,100);
-      return result;
-    };
-    try { vm.fetchSellers=expose(replacement,vm); }
-    catch {
-      vm.__digiToolsPatched=false;
-      update("Panel aktif, tetapi akses seller halaman diblokir Firefox. Perbarui Violentmonkey lalu muat ulang.");
-      return;
-    }
-    update("Siap. Buka Produk lalu pilih seller pada salah satu produk.");
+    if(!settings.enabled || !vm || vm._isDestroyed || typeof vm.selectSeller!=="function")return;
+    let sellers,product;
+    try {
+      sellers=unwrap(vm.sellers);
+      product=unwrap(vm.currentEditted);
+    } catch { return; }
+    if(!vm.dialogSeller || vm.fetchingSellers || !product || !Array.isArray(sellers) || !sellers.length)return;
+    update("Seller terbuka. Memilih kandidat terbaik…");
+    handle(vm,product);
   }
   function scanVue() {
     const roots=[];
@@ -251,12 +225,12 @@
     const host=document.createElement("div");host.id="digi-tools-auto-seller";
     const viewportScale=Number(window.visualViewport?.scale)||1;
     const uiScale=Math.max(1,Math.min(3,1/viewportScale));
-    host.style.cssText="all:initial!important;position:fixed!important;right:16px!important;top:90px!important;z-index:2147483647!important;display:block!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;transform-origin:top right!important;transform:scale("+uiScale+")!important";
+    host.style.cssText="all:initial!important;position:fixed!important;right:16px!important;top:90px!important;z-index:2147483647!important;display:block!important;visibility:visible!important;opacity:1!important;pointer-events:none!important;transform-origin:top right!important;transform:scale("+uiScale+")!important";
     const ui=host.attachShadow({mode:"open"});
     ui.innerHTML=`<style>
       *{box-sizing:border-box}button,input,select,textarea{font:inherit}button{cursor:pointer}
-      .bubble{display:block!important;min-width:132px;min-height:46px;border:0;border-radius:26px;background:#087b96;color:white;padding:12px 16px;box-shadow:0 4px 20px #0008;font:700 14px system-ui;visibility:visible!important;opacity:1!important}
-      .box{display:none;width:min(310px,calc(100vw - 24px));max-height:min(78vh,670px);overflow:auto;border:1px solid #35667a;border-radius:13px;background:#102330;color:#eef6fa;padding:14px;box-shadow:0 8px 26px #0008;font:13px system-ui;margin-bottom:8px}
+      .bubble{display:block!important;pointer-events:auto!important;min-width:132px;min-height:46px;border:0;border-radius:26px;background:#087b96;color:white;padding:12px 16px;box-shadow:0 4px 20px #0008;font:700 14px system-ui;visibility:visible!important;opacity:1!important}
+      .box{display:none;pointer-events:auto!important;width:min(310px,calc(100vw - 24px));max-height:min(78vh,670px);overflow:auto;border:1px solid #35667a;border-radius:13px;background:#102330;color:#eef6fa;padding:14px;box-shadow:0 8px 26px #0008;font:13px system-ui;margin-bottom:8px}
       .box.open{display:block}h3{margin:0 0 8px;font-size:16px}p{margin:5px 0 12px;color:#b9d3dc;line-height:1.4}
       label{display:block;margin:10px 0 4px}input:not([type=checkbox]),textarea,select{width:100%;background:#071925;border:1px solid #426579;border-radius:7px;color:white;padding:8px}
       input[type=checkbox]{margin-right:6px} .row{display:flex;align-items:center;gap:8px}.row>label{flex:1}
@@ -275,7 +249,7 @@
       <button id="fill-all-codes" type="button">⚡ Isi semua SKU di halaman</button>
       <label for="preferred">Seller prioritas (pisah koma)</label><textarea id="preferred"></textarea>
       <label for="blocked">Seller diblokir (pisah koma)</label><textarea id="blocked"></textarea>
-      <div id="status" class="status" role="status">Auto Seller v1.4 aktif. SKU massal siap; buka Produk/Tambah Produk.</div>
+      <div id="status" class="status" role="status">Auto Seller v1.5 aktif. Tombol Digiflazz tidak diubah; pilih seller tetap bisa ditekan.</div>
     </div><button class="bubble" id="toggle" aria-label="Buka pengaturan auto seller">⚡ Auto Seller</button>`;
     const get=id=>ui.getElementById(id);
     get("enabled").checked=settings.enabled;
@@ -306,7 +280,14 @@
     // Typing into an already open product form changes its value without a DOM mutation.
     document.addEventListener("input",()=>{clearTimeout(timer);timer=setTimeout(fillNewCode,180)},true);
     document.addEventListener("change",()=>{clearTimeout(timer);timer=setTimeout(fillNewCode,180)},true);
-    setInterval(scanVue,1800);
+    document.addEventListener("click",e=>{
+      const label=str(e.target?.closest?.("button,a,[role=button]")?.textContent || e.target?.textContent);
+      if(/seller|penjual/i.test(label)) {
+        update("Tombol Digiflazz ditekan. Menunggu daftar seller…");
+        setTimeout(scanVue,80);setTimeout(scanVue,250);setTimeout(scanVue,700);
+      }
+    },true);
+    setInterval(scanVue,900);
   }
   if(testing) {module.exports={chooseSeller,reviewCount,patch,serviceCode,maxPriceForSeller};return}
   try {
