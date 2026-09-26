@@ -292,6 +292,18 @@ async function scan(env, reason = "manual") {
       }
       for (let j=0;j<queries.length;j+=80) await env.DB.batch(queries.slice(j,j+80));
     }
+    const stale=await env.DB.prepare("SELECT sku FROM products WHERE last_seen < (SELECT started_at FROM scan_runs WHERE id=?)").bind(runId).all();
+    if(stale.results.length) {
+      for(let i=0;i<stale.results.length;i+=80) {
+        const skus=stale.results.slice(i,i+80).map(x=>x.sku);
+        const marks=skus.map(()=>"?").join(",");
+        await env.DB.batch([
+          env.DB.prepare("DELETE FROM seller_options WHERE sku IN ("+marks+")").bind(...skus),
+          env.DB.prepare("DELETE FROM products WHERE sku IN ("+marks+")").bind(...skus)
+        ]);
+      }
+      await log(env,"INFO","catalog-cleanup",stale.results.length+" produk lama dihapus karena tidak ada lagi di katalog Digiflazz.");
+    }
     try {
       const sd = await remoteJson(env, "/api/v1/buyer/seller");
       const sellers = listOf(sd,["data.data","data.sellers","data","sellers","result.data","result"]) || [];
