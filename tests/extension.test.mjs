@@ -6,7 +6,7 @@ import { runInNewContext } from "node:vm";
 const source=readFileSync(new URL("../extension/digi-select.user.js",import.meta.url),"utf8");
 const module={exports:{}};
 runInNewContext(source,{module,setTimeout});
-const {chooseSeller,patch}=module.exports;
+const {chooseSeller,patch,serviceCode,maxPriceForSeller}=module.exports;
 const product={id:123,seller_sku_id:"current",max_price:12000};
 const candidate=(id,seller,price,rating=4.8,review="40+")=>({id,seller,price,reviewAvg:rating,rating_qty:review,stock:10,unlimited_stock:0,status_sellerSku:1,connectionType:"ip",seller_details:{sla:"H+0"}});
 
@@ -32,6 +32,20 @@ test("preferred seller bonus is applied after price and quality checks",()=>{
   assert.equal(chooseSeller(options,product,{minRating:4,preferred:"Preferred"}).id,"preferred");
 });
 
+test("codes use game initials and denomination without random characters",()=>{
+  assert.equal(serviceCode("Mobile Legends","5 Diamond"),"ML5");
+  assert.equal(serviceCode("Free Fire","1000DIAMOND"),"FF1000");
+  assert.equal(serviceCode("","Free Fire 1000DIAMOND"),"FF1000");
+  assert.equal(serviceCode("Point Blank","1.000 Cash"),"PB1000");
+  assert.equal(serviceCode("Mobile Legends","Weekly Pass"),null);
+});
+
+test("one global rupiah addition is applied to any seller price",()=>{
+  assert.equal(maxPriceForSeller(15000,1000),16000);
+  assert.equal(maxPriceForSeller(40000,1000),41000);
+  assert.equal(maxPriceForSeller(15000,-1),null);
+});
+
 test("hooks Digiflazz Vue choice after loading the selected product's sellers",async()=>{
   const selected=candidate("better","Better",9500);
   let called=null,saved=false;
@@ -45,5 +59,6 @@ test("hooks Digiflazz Vue choice after loading the selected product's sellers",a
   await new Promise(resolve=>setTimeout(resolve,180));
   assert.equal(called?.id,"better");
   assert.equal(saved,false);
-  assert.equal(component.autoUpdateMaxPrice,true);
+  assert.equal(component.autoUpdateMaxPrice,false);
+  assert.equal(component.currentEditted.max_price,9500);
 });

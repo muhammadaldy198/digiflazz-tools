@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Digi Tools — Auto Select Seller
 // @namespace    https://tools.lfamiliastore.my.id/
-// @version      1.0.0
+// @version      1.1.0
 // @description  Pilih seller langsung di halaman produk Digiflazz. Sesi tetap di browser.
 // @match        https://member.digiflazz.com/*
 // @run-at       document-start
@@ -13,13 +13,30 @@
   "use strict";
   const testing=typeof module!=="undefined" && !!module.exports;
   const KEY = "digiTools.autoSeller.v1";
-  const DEFAULTS = {enabled:true,saveMode:"manual",minRating:4,minReviews:0,priceCap:0,autoFillMaxPrice:true,autoRandomCode:true,preferred:"",blocked:""};
+  const DEFAULTS = {enabled:true,saveMode:"manual",minRating:4,minReviews:0,priceCap:0,autoFillMaxPrice:true,maxPriceOffset:0,autoServiceCode:true,preferred:"",blocked:""};
   const str = value => String(value ?? "").trim();
   const names = value => new Set(str(value).split(/[\n,]/).map(x=>x.trim().toLowerCase()).filter(Boolean));
   function reviewCount(value) {
     const raw=str(value);
     if (raw.startsWith("<")) return 0;
     return Number(raw.match(/^\d+/)?.[0] || 0);
+  }
+  function serviceCode(game,product) {
+    const name=str(game).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
+    const title=str(product).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
+    const gameName=name||title.replace(/\d[\d.,]*.*$/,"").trim();
+    const aliases=[[/\bMOBILE\s+LEGENDS\b/,"ML"],[/\bFREE\s+FIRE\b/,"FF"],[/\bPUBG\s+MOBILE\b/,"PUBG"],[/\bCALL\s+OF\s+DUTY\s+MOBILE\b/,"CODM"]];
+    const prefix=aliases.find(([pattern])=>pattern.test(gameName))?.[1] || gameName.split(/[^A-Z0-9]+/).filter(x=>x && !["GAME","TOP","UP"].includes(x)).slice(0,4).map(x=>x[0]).join("");
+    const withoutGame=name&&title.startsWith(name)?title.slice(name.length):title;
+    const amount=withoutGame.match(/(?:^|[^A-Z0-9])(\d{1,3}(?:[.,]\d{3})+|\d+)(?=[^0-9]|$)/)?.[1]?.replace(/[.,]/g,"");
+    const value=Number(amount);
+    if(!prefix || !Number.isSafeInteger(value) || value<1) return null;
+    return prefix+String(value);
+  }
+  function maxPriceForSeller(price,offset) {
+    const base=Number(price),extra=Number(offset);
+    if(!Number.isSafeInteger(base)||base<1||!Number.isSafeInteger(extra)||extra<0||base+extra>1000000000) return null;
+    return base+extra;
   }
   function chooseSeller(choices, product, options) {
     const cfg={...DEFAULTS,...options}, blocked=names(cfg.blocked), preferred=names(cfg.preferred);
@@ -57,8 +74,14 @@
     lastProduct=str(product.id);lastSeller=str(candidate.id);lastActionTime=Date.now();
     try {
       // Use Digiflazz's own Vue action, which fills all linked seller fields.
-      vm.autoUpdateMaxPrice=!!cfg.autoFillMaxPrice;
+      vm.autoUpdateMaxPrice=false;
       vm.selectSeller(candidate);
+      if(cfg.autoFillMaxPrice) {
+        const max=maxPriceForSeller(candidate.price,cfg.maxPriceOffset);
+        if(max==null){update("Seller terpilih, tetapi nilai max price tidak valid. Periksa sebelum menyimpan.");return}
+        product.max_price=max;
+        product.change=true;
+      }
       update("Dipilih: "+str(candidate.seller)+" · Rp"+Number(candidate.price).toLocaleString("id-ID")+" · rating "+str(candidate.reviewAvg??"—")+(cfg.saveMode==="auto"?" · menyimpan…":" · tekan Simpan di Digiflazz"));
       if(cfg.saveMode==="auto") {
         if(typeof vm.editProduct!=="function") {update("Seller terpilih. Tombol simpan otomatis tidak ditemukan; tekan Simpan di Digiflazz.");return}
@@ -99,25 +122,25 @@
     function walk(vm) {if(!vm||seen.has(vm))return;seen.add(vm);patch(vm);for(const child of vm.$children||[])walk(child)}
     for(const vm of roots)walk(vm);
   }
-  function randomCode() {
-    const bytes=crypto.getRandomValues(new Uint8Array(8));
-    return "L"+[...bytes].map(x=>"0123456789ABCDEFGHJKMNPQRSTVWXYZ"[x%32]).join("");
-  }
-  const populated=new WeakSet();
+  const autoCodes=new WeakMap();
   function fillNewCode() {
-    if(!settings.autoRandomCode)return;
+    if(!settings.autoServiceCode)return;
     for(const dialog of document.querySelectorAll(".el-dialog,.modal,.modal-dialog")) {
-      if(populated.has(dialog) || !dialog.getClientRects().length || !/tambah|buat|add/i.test(str(dialog.querySelector(".el-dialog__title,.modal-title")?.textContent)))continue;
+      if(!dialog.getClientRects().length || !/tambah|buat|add/i.test(str(dialog.querySelector(".el-dialog__title,.modal-title")?.textContent)))continue;
       const label=[...dialog.querySelectorAll("label")].find(x=>/kode (produk|layanan)|sku buyer/i.test(str(x.textContent)));
       const field=label?.closest(".el-form-item,.form-group")?.querySelector("input") || dialog.querySelector('input[name="buyer_sku_code"],input[placeholder*="Kode Produk"]');
-      if(!field || field.value)continue;
+      if(!field || field.value && field.value!==autoCodes.get(dialog))continue;
+      const game=dialog.querySelector('input[name="game"],input[name="brand"],input[name="category"]')?.value || str(dialog.querySelector('[data-game-name]')?.getAttribute('data-game-name'));
+      const product=dialog.querySelector('input[name="product"],input[name="product_name"],input[name="name"]')?.value || str(dialog.querySelector('[data-product-name]')?.getAttribute('data-product-name'));
+      const code=serviceCode(game,product);
+      if(!code || code===autoCodes.get(dialog) && field.value===code)continue;
       const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")?.set;
       if(!setter)continue;
-      setter.call(field,randomCode());
+      setter.call(field,code);
       field.dispatchEvent(new Event("input",{bubbles:true}));
       field.dispatchEvent(new Event("change",{bubbles:true}));
-      populated.add(dialog);
-      update("Kode layanan acak diisi pada form Tambah Produk.");
+      autoCodes.set(dialog,code);
+      update("Kode layanan "+code+" diisi dari nama game dan nominal.");
     }
   }
   function panel() {
@@ -139,8 +162,12 @@
       <label for="mode">Simpan perubahan produk</label><select id="mode"><option value="manual">Manual: tekan Simpan di Digiflazz</option><option value="auto">Otomatis setelah seller dipilih</option></select>
       <div class="row"><label for="rating">Rating minimal<input id="rating" type="number" min="0" max="5" step="0.1"></label><label for="reviews">Ulasan minimal<input id="reviews" type="number" min="0"></label></div>
       <label for="cap">Batas harga global (Rp; 0 = ikut max produk)</label><input id="cap" type="number" min="0">
-      <label><input id="fill" type="checkbox"> Isi harga maksimum dari harga seller baru</label>
-      <label><input id="code" type="checkbox"> Buat kode layanan acak saat tambah produk</label>
+      <label><input id="fill" type="checkbox"> Isi max price saat seller terpilih</label>
+      <label for="offset">Tambahan max price untuk semua produk (Rp)</label><input id="offset" type="number" min="0" placeholder="1000">
+      <p>Contoh harga seller Rp15.000 + tambahan Rp1.000 = max price Rp16.000.</p>
+      <label><input id="code" type="checkbox"> Isi kode dari nama game + jumlah nominal</label>
+      <div class="row"><label for="code-game">Nama game<input id="code-game" placeholder="Mobile Legends"></label><label for="code-product">Nominal<input id="code-product" placeholder="5 Diamond"></label></div>
+      <button id="make-code" type="button">Buat kode</button> <button id="copy-code" type="button" disabled>Salin</button> <strong id="code-result"></strong>
       <label for="preferred">Seller prioritas (pisah koma)</label><textarea id="preferred"></textarea>
       <label for="blocked">Seller diblokir (pisah koma)</label><textarea id="blocked"></textarea>
       <div id="status" class="status" role="status">Menunggu halaman Produk…</div>
@@ -152,13 +179,26 @@
     get("reviews").value=settings.minReviews;
     get("cap").value=settings.priceCap;
     get("fill").checked=settings.autoFillMaxPrice;
-    get("code").checked=settings.autoRandomCode;
+    get("offset").value=settings.maxPriceOffset;
+    get("code").checked=settings.autoServiceCode;
     get("preferred").value=settings.preferred;
     get("blocked").value=settings.blocked;
     status=message=>{get("status").textContent=message};
     get("toggle").onclick=()=>get("box").classList.toggle("open");
+    get("make-code").onclick=()=>{
+      const code=serviceCode(get("code-game").value,get("code-product").value);
+      get("code-result").textContent=code||"Isi game dan nominal angka";
+      get("copy-code").disabled=!code;
+      if(code)update("Kode "+code+" dibuat dari nama game dan nominal; salin untuk dipakai di Digiflazz.");
+    };
+    get("copy-code").onclick=async()=>{
+      const code=get("code-result").textContent;
+      if(!/^[A-Z]{1,5}\d+$/.test(code))return;
+      try {await navigator.clipboard.writeText(code);update("Kode "+code+" disalin.")}
+      catch {update("Gagal menyalin. Pilih teks kode "+code+" secara manual.")}
+    };
     ui.addEventListener("change",()=>{
-      settings={enabled:get("enabled").checked,saveMode:get("mode").value,minRating:Math.min(5,Math.max(0,Number(get("rating").value)||0)),minReviews:Math.max(0,Number(get("reviews").value)||0),priceCap:Math.max(0,Number(get("cap").value)||0),autoFillMaxPrice:get("fill").checked,autoRandomCode:get("code").checked,preferred:get("preferred").value,blocked:get("blocked").value};
+      settings={enabled:get("enabled").checked,saveMode:get("mode").value,minRating:Math.min(5,Math.max(0,Number(get("rating").value)||0)),minReviews:Math.max(0,Number(get("reviews").value)||0),priceCap:Math.max(0,Number(get("cap").value)||0),autoFillMaxPrice:get("fill").checked,maxPriceOffset:Math.min(1000000000,Math.max(0,Math.trunc(Number(get("offset").value)||0))),autoServiceCode:get("code").checked,preferred:get("preferred").value,blocked:get("blocked").value};
       localStorage.setItem(KEY,JSON.stringify(settings));update("Pengaturan tersimpan di browser ini.");
     });
     document.body.append(host);
@@ -168,8 +208,11 @@
     panel();scanVue();fillNewCode();
     const observer=new MutationObserver(()=>{clearTimeout(timer);timer=setTimeout(()=>{scanVue();fillNewCode()},180)});
     observer.observe(document.documentElement,{childList:true,subtree:true});
+    // Typing into an already open product form changes its value without a DOM mutation.
+    document.addEventListener("input",()=>{clearTimeout(timer);timer=setTimeout(fillNewCode,180)},true);
+    document.addEventListener("change",()=>{clearTimeout(timer);timer=setTimeout(fillNewCode,180)},true);
     setInterval(scanVue,1800);
   }
-  if(testing) {module.exports={chooseSeller,reviewCount,patch};return}
+  if(testing) {module.exports={chooseSeller,reviewCount,patch,serviceCode,maxPriceForSeller};return}
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",init,{once:true});else init();
 })();

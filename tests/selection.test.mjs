@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8").replace("const HTML = __HTML__;", "const HTML = '';");
-const { rank, normalizeProduct, validateSettings, changedProduct } = await import("data:text/javascript," + encodeURIComponent(source));
+const { rank, normalizeProduct, validateSettings, changedProduct, serviceCode } = await import("data:text/javascript," + encodeURIComponent(source));
 
 test("seller filtering rejects blocked, expensive, and out of stock candidates", () => {
   const product = { max_price: 11000 };
@@ -22,6 +22,8 @@ test("seller filtering rejects blocked, expensive, and out of stock candidates",
 test("settings validate opt-in live switching", () => {
   const current = { autoSwitch: false, dryRun: true };
   assert.deepEqual([validateSettings({ autoSwitch: true, dryRun: false }, current).autoSwitch,validateSettings({ autoSwitch: true, dryRun: false }, current).dryRun],[true,false]);
+  assert.equal(validateSettings({maxPriceOffset:1000},current).maxPriceOffset,1000);
+  assert.throws(()=>validateSettings({maxPriceOffset:1000.5},current),/bulat/);
 });
 
 test("seller selection requires known rating, review count, and active status", () => {
@@ -53,5 +55,13 @@ test("switch saves exact Digiflazz seller fields and preserves unrelated product
   assert.equal(result.max_price,19000);
   assert.equal(result.multi,false);
   assert.equal(changedProduct(current,candidate,false).max_price,17000);
+  assert.equal(changedProduct(current,candidate,false,1000).max_price,18000);
   assert.equal(current.seller_sku_id,"old");
+});
+
+test("service codes are deterministic and use game initials",()=>{
+  assert.equal(serviceCode("Mobile Legends","5 Diamond"),"ML5");
+  assert.equal(serviceCode("Free Fire","1000DIAMOND"),"FF1000");
+  assert.equal(serviceCode("","Free Fire 1000DIAMOND"),"FF1000");
+  assert.equal(serviceCode("Mobile Legends","Weekly Pass"),null);
 });

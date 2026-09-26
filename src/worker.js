@@ -5,10 +5,10 @@ const decoder = new TextDecoder();
 const DEFAULTS = {
   scanEnabled: false, dryRun: true, autoSwitch: false, scanIntervalMinutes: 5,
   minRating: 0, minReviews: 0, priceCap: 0, preserveMaxPrice: true,
-  saveMode: "manual", autoFillMaxPrice: false, proactiveScan: false,
+  saveMode: "manual", autoFillMaxPrice: true, proactiveScan: false,
   reoptimizeHours: 0, minSavingsPercent: 5, cooldownHours: 24,
   weights: { price: 40, connection: 30, sla: 20, stock: 10 },
-  autoRandomCode: true
+  maxPriceOffset: 0
 };
 const secureHeaders = {
   "cache-control": "no-store", "x-content-type-options": "nosniff",
@@ -203,8 +203,11 @@ function validateSettings(input, current) {
   const next = { ...current };
   for (const [key, value] of Object.entries(input)) {
     if (!(key in DEFAULTS)) continue;
-    if (["scanEnabled","dryRun","autoSwitch","preserveMaxPrice","autoFillMaxPrice","proactiveScan","autoRandomCode"].includes(key)) next[key] = bool(value);
-    else if (["minRating","minReviews","priceCap","scanIntervalMinutes","reoptimizeHours","minSavingsPercent","cooldownHours"].includes(key)) {
+    if (["scanEnabled","dryRun","autoSwitch","preserveMaxPrice","autoFillMaxPrice","proactiveScan"].includes(key)) next[key] = bool(value);
+    else if (key === "maxPriceOffset") {
+      if(!Number.isSafeInteger(Number(value))||Number(value)<0||Number(value)>1000000000)throw Error("Tambahan max price harus angka rupiah bulat antara 0 dan 1 miliar.");
+      next[key]=Number(value);
+    } else if (["minRating","minReviews","priceCap","scanIntervalMinutes","reoptimizeHours","minSavingsPercent","cooldownHours"].includes(key)) {
       const limits = {minRating:[0,5],minReviews:[0,100000],priceCap:[0,1000000000],scanIntervalMinutes:[5,1440],reoptimizeHours:[0,720],minSavingsPercent:[0,100],cooldownHours:[1,720]};
       next[key] = bounded(value, ...limits[key], current[key]);
     } else if (key === "saveMode" && ["manual","auto"].includes(value)) next[key] = value;
@@ -342,7 +345,19 @@ async function freshProduct(env, sku) {
   if (!row) throw Error("SKU tidak ditemukan pada data terbaru Digiflazz.");
   return row;
 }
-function changedProduct(current, choice, preserveMaxPrice=true) {
+function serviceCode(game,product) {
+  const name=str(game).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
+  const title=str(product).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
+  const gameName=name||title.replace(/\d[\d.,]*.*$/,"").trim();
+  const aliases=[[/\bMOBILE\s+LEGENDS\b/,"ML"],[/\bFREE\s+FIRE\b/,"FF"],[/\bPUBG\s+MOBILE\b/,"PUBG"],[/\bCALL\s+OF\s+DUTY\s+MOBILE\b/,"CODM"]];
+  const prefix=aliases.find(([pattern])=>pattern.test(gameName))?.[1] || gameName.split(/[^A-Z0-9]+/).filter(x=>x && !["GAME","TOP","UP"].includes(x)).slice(0,4).map(x=>x[0]).join("");
+  const withoutGame=name&&title.startsWith(name)?title.slice(name.length):title;
+  const amount=withoutGame.match(/(?:^|[^A-Z0-9])(\d{1,3}(?:[.,]\d{3})+|\d+)(?=[^0-9]|$)/)?.[1]?.replace(/[.,]/g,"");
+  const value=Number(amount);
+  if(!prefix||!Number.isSafeInteger(value)||value<1)return null;
+  return prefix+String(value);
+}
+function changedProduct(current, choice, preserveMaxPrice=true, maxPriceOffset=0) {
   const updated = { ...current };
   for (const [field, value] of Object.entries({
     seller:choice.seller,seller_sku_id:choice.id,seller_sku_id_int:choice.id_int,
@@ -354,7 +369,11 @@ function changedProduct(current, choice, preserveMaxPrice=true) {
     multi:choice.connectionType!=="jabber"&&choice.multi,multi_counter:choice.multi_counter,
     change:true
   })) if (value !== undefined) updated[field] = value;
-  if (!preserveMaxPrice) updated.max_price = choice.price;
+  if (!preserveMaxPrice) {
+    const max=Number(choice.price)+Number(maxPriceOffset);
+    if(!Number.isSafeInteger(max)||max<1||max>1000000000) throw Error("Harga maksimum hasil penambahan tidak valid.");
+    updated.max_price=max;
+  }
   return updated;
 }
 async function switchSeller(env, sku, sellerId, reason) {
@@ -377,7 +396,7 @@ async function switchSeller(env, sku, sellerId, reason) {
   try {
     // Set before the network call: a lost response may still mean Digiflazz saved the change.
     sent=true;
-    await remoteSave(env,changedProduct(current,choice,config.preserveMaxPrice && !config.autoFillMaxPrice));
+    await remoteSave(env,changedProduct(current,choice,config.preserveMaxPrice && !config.autoFillMaxPrice,config.maxPriceOffset));
     const verified=await freshProduct(env,sku);
     if (String(verified.seller_sku_id)!==sellerId) throw Error("Respons simpan diterima, tetapi seller baru belum terkonfirmasi.");
     await env.DB.batch([
@@ -620,20 +639,17 @@ async function api(req, env, url) {
       await env.DB.batch(operations);
       return reply({ok:true,settings:next});
     }
-    if(method==="GET"&&path==="/api/random-code") {
-      for(let attempt=0;attempt<5;attempt++) {
-        const bytes=crypto.getRandomValues(new Uint8Array(8));
-        const code="L"+[...bytes].map(n=>"0123456789ABCDEFGHJKMNPQRSTVWXYZ"[n%32]).join("");
-        if(!await env.DB.prepare("SELECT sku FROM products WHERE sku=?").bind(code).first())return reply({ok:true,code});
-      }
-      throw Error("Gagal mendapatkan kode unik. Coba lagi.");
+    if(method==="POST"&&path==="/api/service-code") {
+      const body=await getJson(req),code=serviceCode(body.game,body.product);
+      if(!code) throw Error("Isi nama game dan jumlah nominal angka, misalnya Mobile Legends dan 5 Diamond.");
+      return reply({ok:true,code,available:!await env.DB.prepare("SELECT sku FROM products WHERE sku=?").bind(code).first()});
     }
     return failure("Halaman API tidak ditemukan.",404);
   } catch(error) {
     return failure(error, /sesi|Digiflazz mengembalikan|format katalog|tidak mengembalikan/i.test(error.message)?502:400);
   }
 }
-export { rank, normalizeProduct, validateSettings, changedProduct };
+export { rank, normalizeProduct, validateSettings, changedProduct, serviceCode };
 export default {
   async fetch(req,env) {
     const url=new URL(req.url);
