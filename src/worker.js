@@ -6,7 +6,7 @@ const DEFAULTS = {
   scanEnabled: false, dryRun: true, autoSwitch: false, scanIntervalMinutes: 5,
   minRating: 0, minReviews: 0, priceCap: 0, preserveMaxPrice: true,
   saveMode: "manual", autoFillMaxPrice: true, proactiveScan: false,
-  reoptimizeHours: 0, minSavingsPercent: 5, cooldownHours: 24,
+  reoptimizeHours: 0, minSavingsPercent: 5, cooldownHours: 24, autoSwitchBatchSize: 5,
   weights: { price: 40, connection: 30, sla: 20, stock: 10 },
   maxPriceOffset: 0
 };
@@ -207,8 +207,8 @@ function validateSettings(input, current) {
     else if (key === "maxPriceOffset") {
       if(!Number.isSafeInteger(Number(value))||Number(value)<0||Number(value)>1000000000)throw Error("Tambahan max price harus angka rupiah bulat antara 0 dan 1 miliar.");
       next[key]=Number(value);
-    } else if (["minRating","minReviews","priceCap","scanIntervalMinutes","reoptimizeHours","minSavingsPercent","cooldownHours"].includes(key)) {
-      const limits = {minRating:[0,5],minReviews:[0,100000],priceCap:[0,1000000000],scanIntervalMinutes:[5,1440],reoptimizeHours:[0,720],minSavingsPercent:[0,100],cooldownHours:[1,720]};
+    } else if (["minRating","minReviews","priceCap","scanIntervalMinutes","reoptimizeHours","minSavingsPercent","cooldownHours","autoSwitchBatchSize"].includes(key)) {
+      const limits = {minRating:[0,5],minReviews:[0,100000],priceCap:[0,1000000000],scanIntervalMinutes:[5,1440],reoptimizeHours:[0,720],minSavingsPercent:[0,100],cooldownHours:[1,720],autoSwitchBatchSize:[1,10]};
       next[key] = bounded(value, ...limits[key], current[key]);
     } else if (key === "saveMode" && ["manual","auto"].includes(value)) next[key] = value;
     else if (key === "weights") {
@@ -282,18 +282,20 @@ async function scan(env, reason = "manual") {
 function rank(product, rows, prefs, rule, config, zone) {
   const blocked = new Set(prefs.filter(p=>p.mode==="blocked").map(p=>p.seller_name.toLowerCase()));
   const preferred = new Set(prefs.filter(p=>p.mode==="preferred").map(p=>p.seller_name.toLowerCase()));
-  const max = Math.min(...[rule?.max_price, product.max_price, config.priceCap].filter(x=>Number(x)>0).map(Number), Infinity);
+  const hasHealthState = Object.prototype.hasOwnProperty.call(product,"seller_name") || Object.prototype.hasOwnProperty.call(product,"seller_active") || Object.prototype.hasOwnProperty.call(product,"stock");
+  const unhealthy = hasHealthState && (!product.seller_name || product.seller_active === 0 || (product.max_price > 0 && product.price > product.max_price) || (!product.unlimited_stock && product.stock === 0));
+  const max = Math.min(...[rule?.max_price, unhealthy ? 0 : product.max_price, config.priceCap].filter(x=>Number(x)>0).map(Number), Infinity);
   const minRating = rule?.min_rating ?? config.minRating;
   return rows.map(x => {
     const reasons = [];
     const name = x.seller_name.toLowerCase();
     if (blocked.has(name)) reasons.push("Seller diblokir");
-    if (!x.price || Number(x.seller_status) !== 1) reasons.push("Seller tidak aktif");
+    if (!x.price || (x.seller_status != null && Number(x.seller_status) !== 1)) reasons.push("Seller tidak aktif");
     if (x.price > max) reasons.push("Harga di atas batas");
     if (minRating > 0 && (x.rating == null || Number(x.rating) < minRating)) reasons.push("Rating kurang atau tidak tersedia");
     const count = /^\d+/.exec(String(x.review_count || ""));
     if (config.minReviews > 0 && (!count || String(x.review_count).startsWith("<") || Number(count[0]) < config.minReviews)) reasons.push("Ulasan kurang atau tidak tersedia");
-    if (rule?.require_stock !== 0 && !x.unlimited_stock && !(x.stock > 0)) reasons.push("Stok habis atau tidak diketahui");
+    if (rule?.require_stock !== 0 && x.stock != null && !x.unlimited_stock && !(x.stock > 0)) reasons.push("Stok habis");
     if (rule?.avoid_cutoff !== 0 && x.end_cut_off && x.end_cut_off !== "00:00") {
       const now = new Date();
       const clock = new Intl.DateTimeFormat("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"Asia/Jakarta"}).format(now);
@@ -357,10 +359,10 @@ function serviceCode(game,product) {
   if(!prefix||!Number.isSafeInteger(value)||value<1)return null;
   return prefix+String(value);
 }
-function changedProduct(current, choice, preserveMaxPrice=true, maxPriceOffset=0) {
+function changedProduct(current, choice, preserveMaxPrice=true, maxPriceOffset=0, preserveHigherMax=false) {
   const updated = { ...current };
   for (const [field, value] of Object.entries({
-    seller:choice.seller,seller_sku_id:choice.id,seller_sku_id_int:choice.id_int,
+    seller:choice.seller,seller_sku_id:choice.id ?? choice.seller_sku_id,seller_sku_id_int:choice.id_int ?? choice.seller_sku_id_int,
     seller_connection_type:choice.connectionType,seller_sku_code:choice.seller_sku_code,
     seller_sku_desc:choice.deskripsi,price:choice.price,stock:choice.stock,
     unlimited_stock:choice.unlimited_stock,seller_details:choice.seller_details,
@@ -372,7 +374,7 @@ function changedProduct(current, choice, preserveMaxPrice=true, maxPriceOffset=0
   if (!preserveMaxPrice) {
     const max=Number(choice.price)+Number(maxPriceOffset);
     if(!Number.isSafeInteger(max)||max<1||max>1000000000) throw Error("Harga maksimum hasil penambahan tidak valid.");
-    updated.max_price=max;
+    updated.max_price=preserveHigherMax?Math.max(Number(updated.max_price)||0,max):max;
   }
   return updated;
 }
@@ -388,7 +390,8 @@ async function switchSeller(env, sku, sellerId, reason) {
   const recent=await env.DB.prepare("SELECT created_at FROM switch_history WHERE buyer_sku_code=? AND status='success' ORDER BY id DESC LIMIT 1").bind(sku).first();
   if (reason==="auto" && recent && Date.now()-Date.parse(recent.created_at.replace(" ","T")+"Z") < config.cooldownHours*3600000) throw Error("Produk masih dalam masa jeda perpindahan.");
   const choice = JSON.parse(candidate.raw);
-  if (String(choice.id)!==sellerId || Number(choice.status_sellerSku)!==1 || Number(choice.price)!==candidate.price) throw Error("Data kandidat seller tidak konsisten.");
+  const choiceId=String(choice.id ?? choice.seller_sku_id ?? "");
+  if (choiceId!==sellerId || (choice.status_sellerSku != null && Number(choice.status_sellerSku)!==1) || Number(choice.price)!==candidate.price) throw Error("Data kandidat seller tidak konsisten.");
   const acquired=await env.DB.prepare("INSERT INTO switch_operations(sku,status,target_seller_id) VALUES(?,'pending',?) ON CONFLICT(sku) DO UPDATE SET status='pending',target_seller_id=excluded.target_seller_id,started_at=CURRENT_TIMESTAMP WHERE switch_operations.status IN ('success','error') AND switch_operations.started_at < datetime('now','-30 seconds')").bind(sku,sellerId).run();
   if (!acquired.meta.changes) throw Error("Ada perpindahan yang masih diproses atau perlu diperiksa untuk SKU ini.");
   const record=await env.DB.prepare("INSERT INTO switch_history(buyer_sku_code,from_seller,to_seller,reason,previous_price,new_price,status) VALUES(?,?,?,?,?,?,'pending')").bind(sku,String(current.seller||product.seller_name),candidate.seller_name,reason,Number(current.price),candidate.price).run();
@@ -396,7 +399,7 @@ async function switchSeller(env, sku, sellerId, reason) {
   try {
     // Set before the network call: a lost response may still mean Digiflazz saved the change.
     sent=true;
-    await remoteSave(env,changedProduct(current,choice,config.preserveMaxPrice && !config.autoFillMaxPrice,config.maxPriceOffset));
+    await remoteSave(env,changedProduct(current,choice,config.preserveMaxPrice && !config.autoFillMaxPrice,config.maxPriceOffset,config.preserveMaxPrice && config.autoFillMaxPrice));
     const verified=await freshProduct(env,sku);
     if (String(verified.seller_sku_id)!==sellerId) throw Error("Respons simpan diterima, tetapi seller baru belum terkonfirmasi.");
     await env.DB.batch([
@@ -415,6 +418,38 @@ async function switchSeller(env, sku, sellerId, reason) {
     throw error;
   }
 }
+async function autoSwitchBatch(env, requestedLimit) {
+  const cfg=await settings(env);
+  if(!cfg.autoSwitch || cfg.dryRun) throw Error("Aktifkan Auto-switch dan matikan mode Pratinjau terlebih dahulu.");
+  const verified=await env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first();
+  if(!verified) throw Error("Lakukan satu perpindahan seller manual yang berhasil sebelum menjalankan auto-switch.");
+  const limit=Math.trunc(bounded(requestedLimit,1,10,cfg.autoSwitchBatchSize));
+  const targets=await env.DB.prepare("SELECT sku FROM products WHERE active=1 AND (seller_name='' OR seller_active=0 OR (max_price>0 AND price>max_price) OR (stock=0 AND unlimited_stock=0)) AND sku NOT IN (SELECT buyer_sku_code FROM product_locks) AND sku NOT IN (SELECT sku FROM switch_operations WHERE status IN ('pending','unknown')) ORDER BY last_seen ASC LIMIT ?").bind(limit).all();
+  let switched=0,noCandidate=0,failed=0;
+  const results=[];
+  for(const {sku} of targets.results) {
+    try {
+      const selection=await rankedOptions(env,sku);
+      const current=JSON.parse(selection.product.raw);
+      const best=selection.options.find(o=>o.eligible && o.seller_id!==String(current.seller_sku_id));
+      if(!best) {
+        noCandidate++;
+        await log(env,"WARN","auto-switch","Tidak ada kandidat seller yang memenuhi aturan.",sku);
+        results.push({sku,status:"no_candidate"});
+        continue;
+      }
+      const changed=await switchSeller(env,sku,best.seller_id,"auto");
+      switched++;
+      results.push({sku,status:"switched",seller:changed.seller,price:changed.price});
+    } catch(error) {
+      failed++;
+      await log(env,"WARN","auto-switch",error.message,sku);
+      results.push({sku,status:"error",error:error.message});
+    }
+  }
+  return {ok:true,examined:targets.results.length,switched,noCandidate,failed,remainingPossible:targets.results.length===limit,results};
+}
+
 async function updateMaxPrice(env,sku,amount) {
   if (!Number.isSafeInteger(amount) || amount<1 || amount>1000000000) throw Error("Harga maksimum harus berupa angka positif.");
   const product=await env.DB.prepare("SELECT raw,price FROM products WHERE sku=?").bind(sku).first();
@@ -521,6 +556,10 @@ async function api(req, env, url) {
       return reply({ok:true,disconnected:true});
     }
     if (method==="POST" && path==="/api/scan") return reply(await scan(env));
+    if (method==="POST" && path==="/api/automation/run") {
+      const body=await getJson(req);
+      return reply(await autoSwitchBatch(env,body.limit));
+    }
     if (method==="POST" && path==="/api/discover") return reply(await discover(env));
     if (method==="GET" && path==="/api/discover") {
       const rows=await env.DB.prepare("SELECT route FROM api_discovery ORDER BY route LIMIT 300").all();
@@ -680,7 +719,7 @@ export default {
           }
         }
         if(cfg.proactiveScan) {
-          const sample=await env.DB.prepare("SELECT p.sku FROM products p LEFT JOIN seller_options o ON o.sku=p.sku WHERE p.active=1 AND p.seller_active=1 AND p.price>0 AND (p.stock>0 OR p.unlimited_stock=1) GROUP BY p.sku ORDER BY min(COALESCE(o.last_seen,'1970-01-01')) ASC LIMIT 5").all();
+          const sample=await env.DB.prepare("SELECT p.sku FROM products p LEFT JOIN seller_options o ON o.sku=p.sku WHERE p.active=1 AND p.seller_active=1 AND p.price>0 AND (p.stock>0 OR p.unlimited_stock=1) GROUP BY p.sku ORDER BY min(COALESCE(o.last_seen,'1970-01-01')) ASC LIMIT ?").bind(Math.min(10,cfg.autoSwitchBatchSize)).all();
           for(const {sku} of sample.results) {
             try {
               const data=await rankedOptions(env,sku);
@@ -695,18 +734,10 @@ export default {
           }
         }
         if(cfg.autoSwitch && !cfg.dryRun) {
-          const verified=await env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first();
-          if(verified) {
-            const targets=await env.DB.prepare("SELECT sku FROM products WHERE active=1 AND (seller_name='' OR seller_active=0 OR (max_price>0 AND price>max_price) OR (stock=0 AND unlimited_stock=0)) AND sku NOT IN (SELECT buyer_sku_code FROM product_locks) AND sku NOT IN (SELECT sku FROM switch_operations WHERE status IN ('pending','unknown')) LIMIT 3").all();
-            for(const {sku} of targets.results) {
-              try {
-                const selection=await rankedOptions(env,sku);
-                const current=JSON.parse(selection.product.raw);
-                const best=selection.options.find(o=>o.eligible && o.seller_id!==String(current.seller_sku_id));
-                if(best) { await switchSeller(env,sku,best.seller_id,"auto");break; }
-              } catch(error) { await log(env,"WARN","auto-switch",error.message,sku); }
-            }
-          }
+          try {
+            const summary=await autoSwitchBatch(env,cfg.autoSwitchBatchSize);
+            if(summary.examined) await log(env,"INFO","auto-switch","Batch otomatis: "+summary.switched+" pindah, "+summary.noCandidate+" tanpa kandidat, "+summary.failed+" gagal.");
+          } catch(error) { await log(env,"WARN","auto-switch",error.message); }
         }
       }
       const known=await env.DB.prepare("SELECT count(*) total FROM api_discovery").first();
