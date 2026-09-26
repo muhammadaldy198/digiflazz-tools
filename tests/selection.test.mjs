@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8").replace("const HTML = __HTML__;", "const HTML = '';");
-const { rank, normalizeProduct, validateSettings, changedProduct, serviceCode } = await import("data:text/javascript," + encodeURIComponent(source));
+const { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow } = await import("data:text/javascript," + encodeURIComponent(source));
 
 test("seller filtering rejects blocked, expensive, and out of stock candidates", () => {
   const product = { max_price: 11000 };
@@ -73,4 +73,14 @@ test("unhealthy products can choose a replacement above the stale product max pr
   const rows=[{seller_name:"Replacement",seller_id:"new",price:10200,rating:4.8,stock:null,seller_status:null,connection:"IP",sla:"H+0"}];
   const result=rank(product,rows,[],null,config,null);
   assert.equal(result[0].eligible,true);
+});
+
+
+test("seller cutoff uses start-to-end window including midnight crossover",()=>{
+  const at=(iso)=>new Date(iso);
+  assert.equal(inCutoffWindow("23:45","00:15",at("2026-09-26T16:50:00Z")),true);
+  assert.equal(inCutoffWindow("23:45","00:15",at("2026-09-26T11:30:00Z")),false);
+  assert.equal(inCutoffWindow("22:30","23:30",at("2026-09-26T16:00:00Z")),true);
+  assert.equal(inCutoffWindow("22:30","23:30",at("2026-09-26T11:30:00Z")),false);
+  assert.equal(inCutoffWindow("00:00","00:00",at("2026-09-26T11:30:00Z")),false);
 });
