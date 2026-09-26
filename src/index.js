@@ -1,487 +1,200 @@
-// Compiled into index.js with the interface from ui.html. Never store credentials here.
-const HTML = "<!doctype html>\n<html lang=\"id\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n  <meta name=\"theme-color\" content=\"#07111e\">\n  <title>Digi Tools · Seller Control</title>\n  <style>\n    :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;font-size:16px;background:#07111e;color:#eaf1fa}\n    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 92% -15%,#17486b 0,transparent 35%),#07111e}\n    button,input,select,textarea{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.48}\n    :focus-visible{outline:2px solid #5bcbe8;outline-offset:2px}\n    .shell{display:grid;grid-template-columns:222px minmax(0,1fr);min-height:100vh}\n    aside{border-right:1px solid #23364b;background:#0a1929;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;padding:20px 12px}\n    .brand{display:flex;align-items:center;gap:10px;font-size:1rem;font-weight:800;letter-spacing:.02em;margin:1px 10px 24px}\n    .brand-mark{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:#30afd1;color:#07111e;font-weight:900}\n    nav{display:grid;gap:3px;overflow:auto}nav button{border:0;background:transparent;color:#9db3c8;text-align:left;padding:10px 12px;border-radius:9px;min-height:40px;font-size:.92rem}\n    nav button:hover,nav button.active{color:#f4fbff;background:#163149}nav button.active{box-shadow:inset 3px 0 #4cc7e8}\n    .aside-foot{margin-top:auto;padding:16px 10px 3px;border-top:1px solid #26394c;color:#91a9bc;font-size:.8rem;line-height:1.5}\n    .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#697b90;margin-right:7px}.dot.good{background:#43d6ab}.dot.warn{background:#f6bd65}\n    main{min-width:0;width:min(1390px,100%);padding:27px clamp(16px,3.4vw,46px) 65px;margin:0 auto}\n    header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:24px}\n    h1{font-size:1.65rem;letter-spacing:-.035em;line-height:1.2;margin:0 0 5px}h2{font-size:1.08rem;margin:0 0 14px;letter-spacing:-.015em}h3{font-size:1rem;margin:0 0 8px}\n    .sub,.muted,small{color:#91a9bc}.sub{font-size:.88rem;line-height:1.5;margin:0}\n    .top-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}\n    .button{border:1px solid #334c61;background:#132c42;color:#eaf5ff;padding:9px 13px;border-radius:9px;min-height:40px;font-size:.88rem;font-weight:650}\n    .button:hover{background:#1c405b}.button.primary{background:#27a7c7;border-color:#27a7c7;color:#031723}.button.primary:hover{background:#56c6df}.button.danger{color:#ffbac2;border-color:#734451;background:#35232f}\n    .button.tiny{min-height:32px;padding:5px 9px;font-size:.8rem}\n    .button.plain{background:transparent;border-color:transparent;color:#91d7ec;padding-left:4px;padding-right:4px}\n    .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}\n    .card{border:1px solid #274058;background:#0e2133;border-radius:13px;padding:17px;min-width:0}\n    .metric{font-size:1.45rem;font-weight:740;letter-spacing:-.03em;margin:9px 0 3px}.metric-label{color:#9fb3c7;font-size:.84rem}\n    .section{margin-top:16px}.section-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}.section-head h2{margin:0}\n    .badge{display:inline-flex;align-items:center;border:1px solid #3b5a70;border-radius:99px;padding:3px 8px;font-size:.75rem;color:#bbd3e3;white-space:nowrap}\n    .badge.good{border-color:#245f58;color:#65e0b7}.badge.warn{border-color:#73512f;color:#ffd18b}.badge.bad{border-color:#78404a;color:#ffadb6}\n    .banner{padding:13px 15px;border:1px solid #70502e;background:#342b23;border-radius:10px;color:#ffe0aa;margin-bottom:16px;font-size:.9rem;line-height:1.5}\n    .banner.error{border-color:#78404a;background:#34232b;color:#ffbfc5}.banner.ok{border-color:#245f58;background:#15342f;color:#9cf0d0}\n    .controls,.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.controls{margin-bottom:14px}.toolbar{margin-bottom:15px}\n    label{display:block;color:#c8d8e6;font-size:.86rem;font-weight:600;margin-bottom:7px}\n    input,select,textarea{width:100%;padding:9px 10px;min-height:40px;border:1px solid #35516a;border-radius:8px;color:#eaf3f9;background:#0a1b2b;outline:none}\n    input:focus,select:focus,textarea:focus{border-color:#4cc7e8}textarea{resize:vertical;min-height:130px;line-height:1.45}\n    input[type=checkbox]{width:17px;height:17px;min-height:auto;accent-color:#31b6d6;margin:0}\n    .check{display:flex;align-items:center;gap:9px;font-weight:500;font-size:.9rem;margin:0}\n    .field{min-width:0}.fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:14px 0}.fields.two{grid-template-columns:repeat(2,minmax(0,1fr))}\n    .toolbar input{max-width:320px}.toolbar select{max-width:180px}\n    .table-wrap{overflow-x:auto;border:1px solid #284058;border-radius:11px}\n    table{width:100%;border-collapse:collapse;font-size:.88rem}th,td{text-align:left;padding:11px 12px;border-bottom:1px solid #253b50;vertical-align:middle}th{font-size:.78rem;letter-spacing:.02em;color:#96adbf;font-weight:700;background:#132b3d;white-space:nowrap}tr:last-child td{border-bottom:0}tbody tr:hover{background:#13283a}\n    .name{font-weight:650;color:#ecf6fb}.sku{color:#97b1c7;font-size:.77rem;display:block;margin-top:3px;word-break:break-all}.nowrap{white-space:nowrap}\n    .empty{padding:27px 16px;text-align:center;color:#9cb2c7;line-height:1.6}.empty strong{display:block;color:#dceaf5;margin-bottom:4px}\n    .row{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:12px 0;border-bottom:1px solid #253b50}.row:last-child{border:0}\n    .stack{display:grid;gap:12px}.right{text-align:right}.spread{display:flex;justify-content:space-between;gap:12px;align-items:center}\n    .feed{display:grid;max-height:470px;overflow:auto}.feed-line{display:flex;gap:11px;padding:10px 0;border-bottom:1px solid #253b50;font-size:.84rem;line-height:1.45}.feed-line:last-child{border:0}\n    .feed-time{flex:0 0 128px;color:#87a1b5;font-variant-numeric:tabular-nums}.feed-msg{overflow-wrap:anywhere}\n    .pill{font-size:.7rem;border-radius:5px;padding:2px 5px;margin-right:6px;background:#1d3a50;color:#8cddf2}.pill.ERROR{background:#5c303a;color:#ffbdc4}.pill.WARN{background:#5b452f;color:#ffdc9b}\n    .pagination{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:12px;font-size:.84rem;color:#abc3d4}\n    .hint{font-size:.81rem;color:#93a9bc;line-height:1.55;margin:9px 0 0}.hint strong{color:#d7eaf4}\n    .modal-shell{position:fixed;inset:0;z-index:10;background:#03101ecc;display:grid;place-items:center;padding:15px}\n    .modal{width:min(680px,100%);max-height:90vh;overflow:auto;background:#10263a;border:1px solid #41617b;border-radius:15px;padding:20px}\n    .modal-top{display:flex;justify-content:space-between;align-items:start;gap:15px;margin-bottom:12px}\n    .code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.91rem;letter-spacing:.07em;color:#8ee6ea}\n    #toast{position:fixed;bottom:20px;right:20px;max-width:min(440px,calc(100vw - 32px));padding:12px 15px;background:#1b4052;border:1px solid #56b9cc;border-radius:10px;z-index:20;box-shadow:0 15px 45px #0008;font-size:.88rem}\n    #toast[hidden],#modal[hidden]{display:none}\n    @media(max-width:900px){.shell{grid-template-columns:1fr}aside{height:auto;z-index:3;position:sticky;top:0;padding:8px 12px 0;border-right:0;border-bottom:1px solid #294157}.brand{margin:1px 0 7px;font-size:.91rem}.brand-mark{width:27px;height:27px}nav{display:flex;overflow-x:auto;gap:3px;scrollbar-width:none;margin:0 -2px}nav::-webkit-scrollbar{display:none}nav button{white-space:nowrap;padding:8px 11px;font-size:.82rem;min-height:38px}nav button.active{box-shadow:inset 0 -2px #4cc7e8}.aside-foot{display:none}main{padding:19px 14px 60px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}\n    @media(max-width:560px){header{display:block;margin-bottom:16px}h1{font-size:1.35rem}.top-actions{justify-content:flex-start;margin-top:13px}.grid,.grid.two{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.card{padding:13px}.metric{font-size:1.2rem}.fields,.fields.two{grid-template-columns:1fr}.feed-time{flex-basis:85px;font-size:.74rem}.toolbar input,.toolbar select{max-width:none}.toolbar>*{flex:1 1 145px}.section{margin-top:12px}.table-wrap{margin:0 -2px}}\n  </style>\n</head>\n<body>\n  <div class=\"shell\">\n    <aside>\n      <div class=\"brand\"><span class=\"brand-mark\">D</span><span>Digi Tools</span></div>\n      <nav aria-label=\"Menu utama\" id=\"nav\">\n        <button data-view=\"overview\" class=\"active\">Ringkasan</button>\n        <button data-view=\"products\">Produk</button>\n        <button data-view=\"sellers\">Penjual</button>\n        <button data-view=\"rules\">Aturan</button>\n        <button data-view=\"zones\">Grup produk</button>\n        <button data-view=\"history\">Perubahan</button>\n        <button data-view=\"logs\">Log sistem</button>\n        <button data-view=\"tools\">Alat input</button>\n        <button data-view=\"settings\">Pengaturan</button>\n        <button data-view=\"connection\">Koneksi</button>\n      </nav>\n      <div class=\"aside-foot\"><span class=\"dot\" id=\"sidebar-dot\"></span><span id=\"sidebar-status\">Memuat status…</span><br>Penggunaan pribadi · dilindungi Access</div>\n    </aside>\n    <main>\n      <header>\n        <div><h1 id=\"title\">Ringkasan</h1><p class=\"sub\" id=\"subtitle\">Pantau katalog dan seller Digiflazz.</p></div>\n        <div class=\"top-actions\"><button class=\"button\" id=\"refresh\">↻ Muat ulang</button><button class=\"button primary\" id=\"scan\">Pindai sekarang</button></div>\n      </header>\n      <div id=\"alert\" role=\"status\"></div>\n      <div id=\"content\" aria-live=\"polite\"></div>\n    </main>\n  </div>\n  <div id=\"modal\" hidden></div><div id=\"toast\" role=\"status\" hidden></div>\n  <script>\n  (() => {\n    const $=id=>document.getElementById(id);\n    const esc=value=>String(value??\"\").replace(/[&<>\"']/g,c=>({\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\",'\"':\"&quot;\",\"'\":\"&#39;\"}[c]));\n    const rupiah=n=>\"Rp\"+Number(n||0).toLocaleString(\"id-ID\");\n    const fmt=s=>s?new Date(String(s).replace(\" \",\"T\")+\"Z\").toLocaleString(\"id-ID\",{dateStyle:\"short\",timeStyle:\"short\"}):\"—\";\n    const state={view:\"overview\",bootstrap:null,page:1,q:\"\",status:\"all\",selected:null,toastTimer:null};\n    const names={overview:[\"Ringkasan\",\"Pantau katalog dan seller Digiflazz.\"],products:[\"Produk\",\"Daftar SKU buyer dan status seller.\"],sellers:[\"Penjual\",\"Pilih seller favorit, prioritas, atau blokir.\"],rules:[\"Aturan\",\"Kriteria pemilihan seller untuk kategori, brand, dan produk.\"],zones:[\"Grup produk\",\"Pisahkan supplier dengan aturan zona.\"],history:[\"Perubahan\",\"Riwayat scan, harga, dan perpindahan seller.\"],logs:[\"Log sistem\",\"Aktivitas terbaru dari pemindaian dan koneksi.\"],tools:[\"Alat input\",\"Harga maksimum dan kode layanan acak.\"],settings:[\"Pengaturan\",\"Atur pemindaian, penilaian, dan penyimpanan.\"],connection:[\"Koneksi\",\"Periksa sesi Digiflazz yang sudah tersimpan.\"]};\n    async function api(path,options={}) {\n      const res=await fetch(path,{...options,headers:{\"content-type\":\"application/json\",...(options.headers||{})}});\n      const data=await res.json().catch(()=>({}));\n      if(!res.ok)throw Error(data.error||\"Permintaan gagal (HTTP \"+res.status+\")\");\n      return data;\n    }\n    function toast(text,bad=false) {\n      clearTimeout(state.toastTimer);\n      $(\"toast\").textContent=text;$(\"toast\").style.borderColor=bad?\"#d8747d\":\"#56b9cc\";$(\"toast\").hidden=false;\n      state.toastTimer=setTimeout(()=>$(\"toast\").hidden=true,4500);\n    }\n    function message(text,type=\"warn\"){$(\"alert\").innerHTML=text?'<div class=\"banner '+type+'\">'+esc(text)+'</div>':\"\"}\n    function loading(){$(\"content\").innerHTML='<div class=\"card empty\">Memuat data…</div>'}\n    function badge(text,type=\"\") {return '<span class=\"badge '+type+'\">'+esc(text)+'</span>'}\n    function error(e){message(e.message,\"error\");toast(e.message,true)}\n    function button(label,action,extra=\"\"){return '<button class=\"button '+extra+'\" data-action=\"'+esc(action)+'\">'+label+'</button>'}\n    async function bootstrap() {\n      const d=await api(\"/api/bootstrap\");state.bootstrap=d;\n      $(\"sidebar-dot\").className=\"dot \"+(d.connection.connected?\"good\":\"warn\");\n      $(\"sidebar-status\").textContent=d.connection.connected?\"Digiflazz terhubung\":\"Digiflazz belum terhubung\";\n      if(!d.connection.connected)message(\"Sesi Digiflazz belum tersimpan. Buka Koneksi untuk menghubungkannya.\");\n      else if(d.lastScan?.status===\"error\")message(\"Scan terakhir gagal: \"+d.lastScan.message);\n      else if(d.counts.issues)message(d.counts.issues+\" produk perlu perhatian. Periksa daftar Produk.\",\"warn\");\n      else message(\"\");\n      return d;\n    }\n    function feed(rows) {return rows?.length?'<div class=\"feed\">'+rows.map(x=>'<div class=\"feed-line\"><span class=\"feed-time\">'+fmt(x.created_at)+'</span><span class=\"feed-msg\"><b class=\"pill '+esc(x.level)+'\">'+esc(x.level)+'</b>'+esc(x.sku?x.sku+\" · \":\"\")+esc(x.message)+'</span></div>').join(\"\")+'</div>':'<div class=\"empty\">Belum ada aktivitas.</div>'}\n    async function overview() {\n      const d=await bootstrap(),scan=d.lastScan,issues=d.counts.issues;\n      $(\"content\").innerHTML=\n        '<div class=\"grid\">'+\n          metric(\"Koneksi\",d.connection.connected?\"Aktif\":\"Belum aktif\",d.connection.lastTestStatus?\"HTTP \"+d.connection.lastTestStatus:\"Sesi terenkripsi di D1\")+\n          metric(\"Produk\",d.counts.products,\"SKU hasil scan\")+\n          metric(\"Perlu perhatian\",issues,issues?\"Cek seller, stok, dan batas harga\":\"Tidak ada yang terdeteksi\")+\n          metric(\"Seller\",d.counts.sellers,\"Terdata di katalog\")+\n        '</div>'+\n        '<section class=\"section grid two\">'+\n          '<div class=\"card\"><div class=\"section-head\"><h2>Monitor</h2>'+badge(d.settings.scanEnabled?\"Aktif\":\"Berhenti\",d.settings.scanEnabled?\"good\":\"\")+'</div>'+\n            '<p class=\"sub\">Pemindaian berjalan lewat Cloudflare Cron saat diaktifkan. Interval '+esc(d.settings.scanIntervalMinutes)+' menit.</p>'+\n            '<div class=\"controls\" style=\"margin-top:16px\">'+button(d.settings.scanEnabled?\"Hentikan monitor\":\"Mulai monitor\",\"monitor\",\"primary\")+button(\"Pindai sekali\",\"scan-now\")+'</div>'+\n            '<p class=\"hint\">Scan terakhir: '+(scan?fmt(scan.finished_at)+\" · \"+esc(scan.status)+\" · \"+esc(scan.total)+\" produk\":\"belum pernah\")+'</p>'+\n          '</div>'+\n          '<div class=\"card\"><div class=\"section-head\"><h2>Mode perubahan</h2>'+badge(\"Pratinjau\",\"warn\")+'</div>'+\n            '<p class=\"sub\">Aturan dan ranking seller dapat disiapkan. Perubahan seller ke Digiflazz hanya tersedia setelah endpoint tulisnya diverifikasi.</p>'+\n            '<div class=\"controls\" style=\"margin-top:16px\">'+button(\"Atur seller\",\"goto-rules\")+button(\"Lihat perubahan\",\"goto-history\")+'</div>'+\n          '</div>'+\n        '</section>'+\n        '<section class=\"section card\"><div class=\"section-head\"><h2>Aktivitas terbaru</h2>'+button(\"Semua log\",\"goto-logs\",\"tiny\")+'</div>'+feed(d.events)+'</section>';\n    }\n    function metric(label,value,detail){return '<div class=\"card\"><div class=\"metric-label\">'+esc(label)+'</div><div class=\"metric\">'+esc(value)+'</div><div class=\"sub\">'+esc(detail)+'</div></div>'}\n    function problem(p){return !p.seller_name||!p.seller_active||(p.max_price>0&&p.price>p.max_price)||(p.stock===0&&!p.unlimited_stock)}\n    async function products() {\n      const params=new URLSearchParams({page:state.page,q:state.q,status:state.status});\n      const d=await api(\"/api/products?\"+params);\n      $(\"content\").innerHTML='<div class=\"card\">'+\n        '<div class=\"toolbar\"><input id=\"search-product\" aria-label=\"Cari produk\" placeholder=\"Cari nama, SKU, brand\" value=\"'+esc(state.q)+'\"><select id=\"filter-product\" aria-label=\"Status produk\"><option value=\"all\">Semua status</option><option value=\"issues\" '+(state.status===\"issues\"?\"selected\":\"\")+'>Perlu perhatian</option><option value=\"locked\" '+(state.status===\"locked\"?\"selected\":\"\")+'>Terkunci</option></select>'+button(\"Cari\",\"search\",\"primary\")+'</div>'+\n        '<div class=\"table-wrap\"><table><thead><tr><th>Produk</th><th>Brand</th><th>Seller</th><th>Harga</th><th>Max</th><th>Status</th><th></th></tr></thead><tbody>'+\n        (d.products.length?d.products.map(p=>'<tr><td><span class=\"name\">'+esc(p.name)+'</span><span class=\"sku\">'+esc(p.sku)+'</span></td><td>'+esc(p.brand||\"—\")+'</td><td>'+esc(p.seller_name||\"—\")+'</td><td class=\"nowrap\">'+rupiah(p.price)+'</td><td class=\"nowrap\">'+(p.max_price?rupiah(p.max_price):\"—\")+'</td><td>'+badge(p.locked?\"Terkunci\":problem(p)?\"Perlu perhatian\":p.active?\"Aktif\":\"Nonaktif\",p.locked?\"\":problem(p)?\"bad\":p.active?\"good\":\"warn\")+'</td><td><button class=\"button tiny\" data-action=\"product\" data-sku=\"'+esc(p.sku)+'\">Detail</button></td></tr>').join(\"\"):'<tr><td colspan=\"7\" class=\"empty\">Belum ada produk. Jalankan Pindai sekarang.</td></tr>')+\n        '</tbody></table></div>'+\n        '<div class=\"pagination\"><span>'+esc(d.total)+' produk · halaman '+esc(d.page)+'</span><button class=\"button tiny\" data-action=\"prev\" '+(state.page<=1?\"disabled\":\"\")+'>Sebelumnya</button><button class=\"button tiny\" data-action=\"next\" '+(d.page*50>=d.total?\"disabled\":\"\")+'>Berikutnya</button></div>'+\n      '</div>';\n    }\n    async function product(sku) {\n      const d=await api(\"/api/products/\"+encodeURIComponent(sku)+\"/options\"),p=d.product;\n      state.selected=p;\n      $(\"modal\").hidden=false;\n      $(\"modal\").innerHTML='<div class=\"modal-shell\"><div class=\"modal\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"modal-title\"><div class=\"modal-top\"><div><h2 id=\"modal-title\">'+esc(p.name)+'</h2><span class=\"sku\">'+esc(p.sku)+'</span></div><button class=\"button tiny\" data-action=\"close\">Tutup</button></div>'+\n        '<div class=\"grid two\"><div class=\"card\"><div class=\"metric-label\">Seller sekarang</div><div class=\"name\">'+esc(p.seller_name||\"—\")+'</div><div class=\"hint\">'+rupiah(p.price)+'</div></div><div class=\"card\"><div class=\"metric-label\">Harga maksimum</div><div class=\"name\">'+(p.max_price?rupiah(p.max_price):\"—\")+'</div><div class=\"hint\">Status '+(problem(p)?\"perlu perhatian\":\"terpantau\")+'</div></div></div>'+\n        '<div class=\"controls\" style=\"margin-top:14px\"><button class=\"button tiny\" data-action=\"lock\" data-sku=\"'+esc(p.sku)+'\">'+(p.locked?\"Buka kunci otomasi\":\"Kunci dari otomasi\")+'</button><button class=\"button tiny\" data-action=\"copy-price\">Salin harga max</button></div>'+\n        '<h3 style=\"margin-top:20px\">Kandidat seller</h3>'+\n        (d.options.length?'<div class=\"table-wrap\"><table><thead><tr><th>Seller</th><th>Harga</th><th>Rating</th><th>Skor</th><th>Aturan</th></tr></thead><tbody>'+d.options.map(o=>'<tr><td class=\"name\">'+esc(o.seller_name)+'</td><td>'+rupiah(o.price)+'</td><td>'+esc(o.rating??\"—\")+'</td><td>'+esc(o.score)+'</td><td>'+badge(o.eligible?\"Lolos\":o.reasons.join(\", \"),o.eligible?\"good\":\"bad\")+'</td></tr>').join(\"\")+'</tbody></table></div>':'<div class=\"empty\">Data alternatif seller belum tersedia dari respons Digiflazz. Scan tidak menebak harga atau pilihan seller.</div>')+\n        '<p class=\"hint\">Perubahan seller live belum dibuka sampai request Digiflazz diverifikasi. Detail dan kunci otomasi tetap dapat dipakai.</p></div></div>';\n    }\n    async function sellers() {\n      const d=await api(\"/api/sellers\");\n      $(\"content\").innerHTML='<div class=\"card\"><div class=\"table-wrap\"><table><thead><tr><th>Penjual</th><th>Rating</th><th>Ulasan</th><th>Produk</th><th>Pilihan</th></tr></thead><tbody>'+\n      (d.sellers.length?d.sellers.map(s=>'<tr><td class=\"name\">'+esc(s.name)+'</td><td>'+esc(s.rating??\"—\")+'</td><td>'+esc(s.review_count??\"—\")+'</td><td>'+esc(s.product_count??\"—\")+'</td><td><select class=\"seller-mode\" data-name=\"'+esc(s.name)+'\" aria-label=\"Pilihan untuk '+esc(s.name)+'\"><option value=\"none\">Biasa</option><option value=\"preferred\" '+(s.mode===\"preferred\"?\"selected\":\"\")+'>Prioritas</option><option value=\"blocked\" '+(s.mode===\"blocked\"?\"selected\":\"\")+'>Blokir</option></select></td></tr>').join(\"\"):'<tr><td colspan=\"5\" class=\"empty\">Belum ada penjual. Jalankan Pindai sekarang.</td></tr>')+'</tbody></table></div><p class=\"hint\">Prioritas dan blokir tersimpan pada alat ini, lalu digunakan saat menilai kandidat seller.</p></div>';\n    }\n    async function rules() {\n      const d=await api(\"/api/rules\");\n      $(\"content\").innerHTML='<div class=\"grid two\"><section class=\"card\"><h2>Buat aturan</h2><form id=\"rule-form\"><div class=\"fields two\"><div class=\"field\"><label for=\"rule-scope\">Berlaku untuk</label><select id=\"rule-scope\" name=\"scope_type\"><option value=\"global\">Semua produk</option><option value=\"category\">Kategori</option><option value=\"brand\">Brand</option><option value=\"type\">Tipe</option><option value=\"product\">Satu SKU</option></select></div><div class=\"field\"><label for=\"rule-target\">Target (kosong jika global)</label><input id=\"rule-target\" name=\"scope_value\" placeholder=\"Mis. MOBILE LEGENDS\"></div><div class=\"field\"><label for=\"rule-rating\">Rating minimal</label><input id=\"rule-rating\" name=\"min_rating\" type=\"number\" min=\"0\" max=\"5\" step=\".1\" placeholder=\"Ikut pengaturan\"></div><div class=\"field\"><label for=\"rule-price\">Batas harga (Rp)</label><input id=\"rule-price\" name=\"max_price\" type=\"number\" min=\"0\" placeholder=\"Ikut max produk\"></div></div><div class=\"controls\"><label class=\"check\"><input type=\"checkbox\" name=\"require_stock\" checked> Wajib stok</label><label class=\"check\"><input type=\"checkbox\" name=\"avoid_cutoff\" checked> Hindari cut-off</label></div><div style=\"margin-top:16px\"><button class=\"button primary\">Simpan aturan</button></div></form></section>'+\n      '<section class=\"card\"><h2>Aturan tersimpan</h2>'+(d.rules.length?d.rules.map(r=>'<div class=\"row\"><div><span class=\"name\">'+esc(r.scope_type==='global'?\"Semua produk\":r.scope_value)+'</span><span class=\"sku\">Rating ≥ '+esc(r.min_rating??\"—\")+' · '+(r.max_price?rupiah(r.max_price):\"ikuti batas produk\")+'</span></div><button class=\"button tiny danger\" data-action=\"delete-rule\" data-id=\"'+esc(r.id)+'\">Hapus</button></div>').join(\"\"):'<div class=\"empty\">Belum ada aturan. Pengaturan global tetap berlaku.</div>')+'</section></div>';\n    }\n    async function zones() {\n      const d=await api(\"/api/zones\");\n      $(\"content\").innerHTML='<div class=\"grid two\"><section class=\"card\"><h2>Buat grup zona</h2><form id=\"zone-form\"><div class=\"fields two\"><div class=\"field\"><label for=\"zone-name\">Nama grup</label><input id=\"zone-name\" name=\"name\" required placeholder=\"ML Zona Sumatra\"></div><div class=\"field\"><label for=\"zone-id\">Product ID Digiflazz</label><input id=\"zone-id\" name=\"product_id\" required></div></div><div class=\"field\"><label for=\"zone-pattern\">Pola deskripsi seller (pisahkan koma)</label><input id=\"zone-pattern\" name=\"patterns\" required placeholder=\"sumatra, all region\"></div><p class=\"hint\">Semua pola harus ditemukan dalam deskripsi kandidat (aturan AND).</p><div style=\"margin-top:16px\"><button class=\"button primary\">Simpan zona</button></div></form></section>'+\n      '<section class=\"card\"><h2>Grup tersimpan</h2>'+(d.zones.length?d.zones.map(z=>'<div class=\"row\"><div><span class=\"name\">'+esc(z.name)+'</span><span class=\"sku\">ID '+esc(z.product_id)+' · '+esc(z.patterns)+' · '+esc(z.assignments)+' SKU</span></div><button class=\"button tiny danger\" data-action=\"delete-zone\" data-id=\"'+esc(z.id)+'\">Hapus</button></div>').join(\"\"):'<div class=\"empty\">Belum ada grup zona.</div>')+'</section></div>'+\n      '<section class=\"section card\"><h2>Pasangkan SKU ke zona</h2><form id=\"assign-form\" class=\"fields two\"><div class=\"field\"><label for=\"zone-sku\">SKU buyer</label><input id=\"zone-sku\" name=\"sku\" required placeholder=\"Kode SKU\"></div><div class=\"field\"><label for=\"zone-choice\">Zona</label><select id=\"zone-choice\" name=\"zone_id\"><option value=\"\">Lepas zona</option>'+d.zones.map(z=>'<option value=\"'+esc(z.id)+'\">'+esc(z.name)+'</option>').join(\"\")+'</select></div><button class=\"button primary\">Simpan penugasan</button></form></section>';\n    }\n    async function history() {\n      const d=await api(\"/api/history\");\n      $(\"content\").innerHTML='<div class=\"grid two\"><section class=\"card\"><h2>Riwayat pemindaian</h2>'+(d.runs.length?d.runs.map(x=>'<div class=\"row\"><div><span class=\"name\">'+fmt(x.started_at)+' · '+esc(x.status)+'</span><span class=\"sku\">'+esc(x.total)+' produk · '+esc(x.issues)+' masalah · '+esc(x.message||\"\")+'</span></div></div>').join(\"\"):'<div class=\"empty\">Belum ada pemindaian.</div>')+'</section><section class=\"card\"><h2>Perubahan harga</h2>'+(d.prices.length?d.prices.map(x=>'<div class=\"row\"><div><span class=\"name\">'+esc(x.buyer_sku_code)+'</span><span class=\"sku\">'+esc(x.seller_name||\"—\")+' · '+fmt(x.captured_at)+'</span></div><strong>'+rupiah(x.price)+'</strong></div>').join(\"\"):'<div class=\"empty\">Belum ada perubahan harga.</div>')+'</section></div><section class=\"section card\"><h2>Perpindahan seller</h2>'+(d.switches.length?d.switches.map(x=>'<div class=\"row\"><div><span class=\"name\">'+esc(x.buyer_sku_code)+'</span><span class=\"sku\">'+esc(x.from_seller)+' → '+esc(x.to_seller)+' · '+fmt(x.created_at)+'</span></div>'+badge(x.status)+'</div>').join(\"\"):'<div class=\"empty\">Belum ada perpindahan seller.</div>')+'</section>';\n    }\n    async function logs() {\n      const d=await api(\"/api/events\");\n      $(\"content\").innerHTML='<div class=\"card\"><div class=\"section-head\"><h2>Aktivitas sistem</h2>'+button(\"Muat ulang\",\"refresh-logs\",\"tiny\")+'</div>'+feed(d.events)+'</div>';\n    }\n    async function tools() {\n      $(\"content\").innerHTML='<div class=\"grid two\"><section class=\"card\"><h2>Hitung harga maksimum</h2><div class=\"fields two\"><div class=\"field\"><label for=\"cost\">Harga modal seller (Rp)</label><input id=\"cost\" type=\"number\" min=\"0\" inputmode=\"numeric\" placeholder=\"10000\"></div><div class=\"field\"><label for=\"margin\">Margin (%)</label><input id=\"margin\" type=\"number\" min=\"0\" max=\"500\" value=\"10\" inputmode=\"decimal\"></div></div><div class=\"spread\"><span class=\"muted\">Max price hasil hitung</span><strong id=\"price-result\" class=\"metric\">—</strong></div><div class=\"controls\" style=\"margin-top:15px\">'+button(\"Salin harga\",\"copy-result\",\"primary\")+'</div><p class=\"hint\">Alat ini menyiapkan nilai untuk kamu salin ke Digiflazz. Ini belum mengubah max price di akun.</p></section>'+\n      '<section class=\"card\"><h2>Kode layanan acak</h2><div class=\"spread\"><span id=\"random-result\" class=\"code\">—</span>'+button(\"Buat kode\",\"generate\",\"primary\")+'</div><div class=\"controls\" style=\"margin-top:16px\">'+button(\"Salin kode\",\"copy-code\")+'</div><p class=\"hint\">Kode dibuat secara acak di server. Periksa bentrok SKU saat dipakai di Digiflazz.</p></section></div>';\n    }\n    async function settings() {\n      const d=await api(\"/api/settings\"),s=d.settings;\n      $(\"content\").innerHTML='<form id=\"settings-form\" class=\"stack\"><div class=\"grid two\"><section class=\"card\"><h2>Monitor</h2><div class=\"fields two\"><div class=\"field\"><label for=\"interval\">Interval scan (menit)</label><input id=\"interval\" name=\"scanIntervalMinutes\" type=\"number\" min=\"5\" max=\"1440\" value=\"'+esc(s.scanIntervalMinutes)+'\"></div><div class=\"field\"><label for=\"minrating\">Rating minimal global</label><input id=\"minrating\" name=\"minRating\" type=\"number\" min=\"0\" max=\"5\" step=\".1\" value=\"'+esc(s.minRating)+'\"></div><div class=\"field\"><label for=\"minreviews\">Jumlah ulasan minimal</label><input id=\"minreviews\" name=\"minReviews\" type=\"number\" min=\"0\" value=\"'+esc(s.minReviews)+'\"></div><div class=\"field\"><label for=\"pricecap\">Batas harga global (Rp)</label><input id=\"pricecap\" name=\"priceCap\" type=\"number\" min=\"0\" value=\"'+esc(s.priceCap)+'\"></div></div><div class=\"stack\"><label class=\"check\"><input name=\"scanEnabled\" type=\"checkbox\" '+(s.scanEnabled?\"checked\":\"\")+'> Jalankan monitor otomatis</label><label class=\"check\"><input name=\"dryRun\" type=\"checkbox\" checked disabled> Pratinjau perubahan seller</label><label class=\"check\"><input name=\"proactiveScan\" type=\"checkbox\" '+(s.proactiveScan?\"checked\":\"\")+'> Catat kandidat harga lebih baik</label></div></section>'+\n      '<section class=\"card\"><h2>Skor seller</h2><p class=\"sub\">Jumlah bobot harus 100%.</p><div class=\"fields two\">'+[[\"price\",\"Harga\"],[\"connection\",\"Koneksi\"],[\"sla\",\"SLA\"],[\"stock\",\"Stok\"]].map(([k,n])=>'<div class=\"field\"><label for=\"w-'+k+'\">'+n+' (%)</label><input id=\"w-'+k+'\" name=\"w-'+k+'\" type=\"number\" min=\"0\" max=\"100\" value=\"'+esc(s.weights[k])+'\"></div>').join(\"\")+'</div><label for=\"save-mode\">Simpan pengaturan</label><select id=\"save-mode\" name=\"saveMode\"><option value=\"manual\" '+(s.saveMode===\"manual\"?\"selected\":\"\")+'>Manual (tombol Simpan)</option><option value=\"auto\" '+(s.saveMode===\"auto\"?\"selected\":\"\")+'>Otomatis saat diubah</option></select><p class=\"hint\">Perubahan pada dashboard disimpan ke D1. OtoSwitch tidak terhubung ke pengaturan alat ini.</p></section></div><div><button class=\"button primary\">Simpan pengaturan</button></div></form>';\n      const form=$(\"settings-form\");form.dataset.auto=s.saveMode;\n      form.addEventListener(\"change\",()=>{if($(\"save-mode\").value===\"auto\" && form.checkValidity())form.requestSubmit()});\n    }\n    async function connection() {\n      const d=await api(\"/api/connection/status\");\n      $(\"content\").innerHTML='<div class=\"grid two\"><section class=\"card\"><h2>Status sesi</h2><div class=\"row\"><span>Digiflazz</span>'+badge(d.connected?\"Tersimpan\":\"Belum tersimpan\",d.connected?\"good\":\"warn\")+'</div><div class=\"row\"><span>Host</span><strong>'+esc(d.sourceHost||\"—\")+'</strong></div><div class=\"row\"><span>Uji terakhir</span><strong>'+(d.lastTestStatus?\"HTTP \"+esc(d.lastTestStatus)+\" · \"+fmt(d.lastTestAt):\"—\")+'</strong></div><div class=\"controls\" style=\"margin-top:16px\">'+button(\"Tes koneksi\",\"test-connection\",\"primary\")+button(\"Temukan jalur API\",\"discover\")+'</div></section>'+\n      '<section class=\"card\"><h2>Perbarui sesi</h2><p class=\"sub\">Sesi lama masih tersimpan. Gunakan bagian ini hanya jika sesi kedaluwarsa.</p><form id=\"connection-form\" class=\"stack\" style=\"margin-top:12px\"><div class=\"field\"><label for=\"curl\">cURL GET dari dashboard Digiflazz</label><textarea id=\"curl\" name=\"curl\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"curl &#39;https://member.digiflazz.com/...&#39; ...\"></textarea></div><div><button class=\"button primary\">Simpan sesi terenkripsi</button></div></form><p class=\"hint\">Jangan bagikan cURL, cookie, atau token ke chat atau GitHub.</p></section></div>';\n    }\n    async function render(view=state.view) {\n      state.view=view;const [title,sub]=names[view];$(\"title\").textContent=title;$(\"subtitle\").textContent=sub;\n      document.querySelectorAll(\"#nav button\").forEach(x=>x.classList.toggle(\"active\",x.dataset.view===view));\n      loading();\n      try{await ({overview,products,sellers,rules,zones,history,logs,tools,settings,connection})[view]()}catch(e){error(e);$(\"content\").innerHTML='<div class=\"card empty\"><strong>Data belum dapat dimuat</strong>'+esc(e.message)+'</div>'}\n    }\n    async function write(path,body,method=\"POST\") {return api(path,{method,body:method===\"DELETE\"?\"{}\":JSON.stringify(body||{})})}\n    async function action(a,el) {\n      if(a===\"scan-now\"){toast(\"Memindai katalog…\");const d=await write(\"/api/scan\");toast(d.total+\" produk dipindai; \"+d.issues+\" perlu perhatian.\");return render()}\n      if(a===\"monitor\"){const d=state.bootstrap;await write(\"/api/settings\",{scanEnabled:!d.settings.scanEnabled});return render()}\n      if(a.startsWith(\"goto-\"))return render({ \"goto-rules\":\"rules\",\"goto-history\":\"history\",\"goto-logs\":\"logs\" }[a]);\n      if(a===\"search\"){state.q=$(\"search-product\").value;state.status=$(\"filter-product\").value;state.page=1;return render()}\n      if(a===\"prev\"||a===\"next\"){state.page+=a===\"next\"?1:-1;return render()}\n      if(a===\"product\")return product(el.dataset.sku);\n      if(a===\"close\"){$(\"modal\").hidden=true;return}\n      if(a===\"lock\"){const p=state.selected;await write(\"/api/products/\"+encodeURIComponent(p.sku)+\"/lock\",{locked:!p.locked});toast(\"Kunci produk diperbarui.\");$(\"modal\").hidden=true;return render()}\n      if(a===\"copy-price\"){await navigator.clipboard.writeText(String(state.selected.max_price||state.selected.price));return toast(\"Harga disalin.\")}\n      if(a===\"delete-rule\"){if(!confirm(\"Hapus aturan ini?\"))return;await write(\"/api/rules/\"+el.dataset.id,{},\"DELETE\");return render()}\n      if(a===\"delete-zone\"){if(!confirm(\"Hapus zona dan seluruh penugasannya?\"))return;await write(\"/api/zones/\"+el.dataset.id,{},\"DELETE\");return render()}\n      if(a===\"refresh-logs\")return render();\n      if(a===\"test-connection\"){const d=await write(\"/api/connection/test\");toast(\"Uji sesi: HTTP \"+d.httpStatus+(d.connected?\" · tersambung\":\" · gagal\"),!d.connected);return render()}\n      if(a===\"discover\"){toast(\"Membaca jalur dashboard Digiflazz…\");const d=await write(\"/api/discover\");toast(d.count+\" jalur API ditemukan untuk pemeriksaan.\");return}\n      if(a===\"generate\"){const d=await api(\"/api/random-code\");$(\"random-result\").textContent=d.code;return}\n      if(a===\"copy-code\"){const c=$(\"random-result\").textContent;if(c===\"—\")throw Error(\"Buat kode dulu.\");await navigator.clipboard.writeText(c);return toast(\"Kode disalin.\")}\n      if(a===\"copy-result\"){const v=$(\"price-result\").dataset.value;if(!v)throw Error(\"Isi harga modal dulu.\");await navigator.clipboard.writeText(v);return toast(\"Harga disalin.\")}\n    }\n    $(\"nav\").addEventListener(\"click\",e=>{const b=e.target.closest(\"button[data-view]\");if(b)render(b.dataset.view)});\n    $(\"refresh\").addEventListener(\"click\",()=>render());\n    $(\"scan\").addEventListener(\"click\",async()=>{try{await action(\"scan-now\")}catch(e){error(e)}});\n    document.addEventListener(\"click\",async e=>{const b=e.target.closest(\"button[data-action]\");if(!b)return;try{b.disabled=true;await action(b.dataset.action,b)}catch(err){error(err)}finally{if(b.isConnected)b.disabled=false}});\n    document.addEventListener(\"change\",async e=>{if(e.target.matches(\".seller-mode\")){try{await write(\"/api/sellers/\"+encodeURIComponent(e.target.dataset.name)+\"/preference\",{mode:e.target.value});toast(\"Pilihan seller tersimpan.\")}catch(err){error(err)}}});\n    document.addEventListener(\"input\",e=>{if(e.target.id===\"cost\"||e.target.id===\"margin\"){const cost=Number($(\"cost\").value),margin=Number($(\"margin\").value),out=$(\"price-result\");const value=Math.ceil(cost*(1+margin/100));out.textContent=cost>0?rupiah(value):\"—\";out.dataset.value=cost>0?String(value):\"\"}});\n    document.addEventListener(\"submit\",async e=>{\n      if(![\"rule-form\",\"zone-form\",\"assign-form\",\"settings-form\",\"connection-form\"].includes(e.target.id))return;\n      e.preventDefault();const f=e.target,b=new FormData(f),id=f.id;\n      try{\n        if(id===\"rule-form\")await write(\"/api/rules\",{scope_type:b.get(\"scope_type\"),scope_value:b.get(\"scope_value\"),min_rating:b.get(\"min_rating\")===\"\"?null:Number(b.get(\"min_rating\")),max_price:b.get(\"max_price\")===\"\"?null:Number(b.get(\"max_price\")),require_stock:b.has(\"require_stock\"),avoid_cutoff:b.has(\"avoid_cutoff\")});\n        if(id===\"zone-form\")await write(\"/api/zones\",Object.fromEntries(b));\n        if(id===\"assign-form\")await write(\"/api/zones/assign\",Object.fromEntries(b));\n        if(id===\"connection-form\"){await write(\"/api/connection\",{curl:b.get(\"curl\")});$(\"curl\").value=\"\"}\n        if(id===\"settings-form\"){const input=Object.fromEntries(b);await write(\"/api/settings\",{scanEnabled:b.has(\"scanEnabled\"),proactiveScan:b.has(\"proactiveScan\"),scanIntervalMinutes:Number(b.get(\"scanIntervalMinutes\")),minRating:Number(b.get(\"minRating\")),minReviews:Number(b.get(\"minReviews\")),priceCap:Number(b.get(\"priceCap\")),saveMode:b.get(\"saveMode\"),weights:{price:Number(b.get(\"w-price\")),connection:Number(b.get(\"w-connection\")),sla:Number(b.get(\"w-sla\")),stock:Number(b.get(\"w-stock\"))}})}\n        toast(\"Tersimpan.\");if(id!==\"settings-form\"||b.get(\"saveMode\")!==\"auto\")await render();\n      }catch(err){error(err)}\n    });\n    render();\n  })();\n  </script>\n</body>\n</html>\n";
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+const BASE = 'https://member.digiflazz.com';
 const DEFAULTS = {
-  scanEnabled: false, dryRun: true, autoSwitch: false, scanIntervalMinutes: 5,
-  minRating: 0, minReviews: 0, priceCap: 0, preserveMaxPrice: true,
-  saveMode: "manual", autoFillMaxPrice: false, proactiveScan: false,
-  reoptimizeHours: 0, minSavingsPercent: 5, cooldownHours: 24,
-  weights: { price: 40, connection: 30, sla: 20, stock: 10 },
-  autoRandomCode: false
+  monitor_enabled: '1', auto_switch: '0', proactive_enabled: '0',
+  max_price_increase_percent: '10', min_rating: '0', review_bonus_max: '15',
+  preserve_max_price: '1', proactive_batch_size: '5', proactive_min_savings_percent: '5'
 };
-const secureHeaders = {
-  "cache-control": "no-store", "x-content-type-options": "nosniff",
-  "referrer-policy": "no-referrer", "x-frame-options": "DENY"
-};
-function reply(value, status = 200) {
-  return Response.json(value, { status, headers: { ...secureHeaders, "content-security-policy": "default-src 'none'; frame-ancestors 'none'" } });
+
+function json(data, status = 200) {
+  return Response.json(data, { status, headers: {
+    'cache-control': 'no-store',
+    'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
+    'x-content-type-options': 'nosniff'
+  }});
 }
-function failure(error, status = 400) {
-  return reply({ ok: false, error: error instanceof Error ? error.message : String(error) }, status);
+function b64(bytes){let s='';for(const b of bytes)s+=String.fromCharCode(b);return btoa(s)}
+function unb64(v){const s=atob(v),o=new Uint8Array(s.length);for(let i=0;i<s.length;i++)o[i]=s.charCodeAt(i);return o}
+async function cryptoKey(secret){const d=await crypto.subtle.digest('SHA-256',enc.encode(secret));return crypto.subtle.importKey('raw',d,{name:'AES-GCM'},false,['encrypt','decrypt'])}
+async function seal(payload,secret){const iv=crypto.getRandomValues(new Uint8Array(12));const c=await crypto.subtle.encrypt({name:'AES-GCM',iv},await cryptoKey(secret),enc.encode(JSON.stringify(payload)));return{encrypted:b64(new Uint8Array(c)),iv:b64(iv)}}
+async function openSession(cipher,iv,secret){const p=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(iv)},await cryptoKey(secret),unb64(cipher));return JSON.parse(dec.decode(p))}
+function isDigi(host){host=host.toLowerCase();return host==='digiflazz.com'||host.endsWith('.digiflazz.com')}
+function opt(src,name){const e=name.replace(/[.*+?^$()|[\]\\]/g,'\\$&');const m=src.match(new RegExp('(?:^|\\s)'+e+'\\s+(?:\'([^\']*)\'|"([^"]*)"|(\\S+))','i'));return m?(m[1]||m[2]||m[3]||null):null}
+function parseCurl(input){
+  if(!input||input.length>100000)throw Error('cURL kosong atau terlalu panjang.');
+  const src=input.replace(/\\\r?\n/g,' ').trim();
+  if(!/^curl\s/i.test(src))throw Error('Format harus berupa perintah cURL.');
+  const m=src.match(/[\'"](https:\/\/[^\'"]+)[\'"]/)||src.match(/\b(https:\/\/[^\s]+)/);
+  if(!m||!m[1])throw Error('URL HTTPS tidak ditemukan.');
+  const url=new URL(m[1]);if(!isDigi(url.hostname))throw Error('cURL harus berasal dari domain Digiflazz.');
+  const method=String(opt(src,'-X')||opt(src,'--request')||'GET').toUpperCase();
+  if(method!=='GET'&&method!=='HEAD')throw Error('Pilih request GET/HEAD untuk koneksi awal.');
+  const headers={},allowed=new Set(['cookie','x-csrf-token','x-xsrf-token','user-agent','referer','origin','accept','content-type','x-requested-with']);
+  const re=/(?:^|\s)(?:-H|--header)\s+(?:'([^']*)'|"([^"]*)")/gi;
+  for(const x of src.matchAll(re)){const raw=x[1]||x[2]||'',i=raw.indexOf(':');if(i<1)continue;const n=raw.slice(0,i).trim().toLowerCase(),v=raw.slice(i+1).trim();if(allowed.has(n))headers[n]=v}
+  const cookie=opt(src,'-b')||opt(src,'--cookie');if(cookie&&!headers.cookie)headers.cookie=cookie;
+  if(!headers.cookie)throw Error('Cookie sesi tidak ditemukan pada cURL.');
+  return{url:url.toString(),method,headers,capturedAt:new Date().toISOString()};
 }
-function bounded(value, min, max, fallback = min) {
-  const n = Number(value);
-  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+function parseCookie(cookieHeader,name){for(const part of String(cookieHeader||'').split(';')){const i=part.indexOf('=');if(i<0)continue;if(part.slice(0,i).trim()===name)return part.slice(i+1).trim()}return null}
+function n(v,f=0){const x=Number(v);return Number.isFinite(x)?x:f}
+function bool(v){return v===true||v===1||v==='1'}
+function s(v){return v==null?'':String(v)}
+function norm(v){return s(v).trim().toLowerCase()}
+function safeJson(v){try{return JSON.stringify(v)}catch{return '{}'}}
+
+async function getConnection(env){return env.DB.prepare('SELECT encrypted_payload,iv,source_host,last_test_status,last_test_at,updated_at FROM digiflazz_connections WHERE id=1').first()}
+async function getSession(env){const r=await getConnection(env);if(!r)throw Error('Belum ada session Digiflazz.');if(!env.SESSION_ENCRYPTION_KEY)throw Error('Encryption secret belum aktif.');return openSession(r.encrypted_payload,r.iv,env.SESSION_ENCRYPTION_KEY)}
+function sessionHeaders(sess,method='GET'){
+  const h={accept:'application/json','x-requested-with':'XMLHttpRequest',referer:BASE+'/buyer-area/product'};
+  if(sess.headers?.cookie)h.cookie=sess.headers.cookie;
+  if(sess.headers?.['user-agent'])h['user-agent']=sess.headers['user-agent'];
+  const xsrf=sess.headers?.['x-xsrf-token']||parseCookie(sess.headers?.cookie,'XSRF-TOKEN');
+  if(xsrf){try{h['x-xsrf-token']=decodeURIComponent(xsrf)}catch{h['x-xsrf-token']=xsrf}}
+  if(sess.headers?.['x-csrf-token'])h['x-csrf-token']=sess.headers['x-csrf-token'];
+  if(method!=='GET'&&method!=='HEAD'){h.origin=BASE;h['content-type']='application/json'}
+  return h;
 }
-function bool(v) { return v === true || v === 1 || v === "true"; }
-function str(v) { return String(v ?? "").trim(); }
-function domainAllowed(host) { return host.toLowerCase() === "member.digiflazz.com"; }
-function hostUrl(value) {
-  const u = new URL(value);
-  if (u.protocol !== "https:" || !domainAllowed(u.hostname)) throw Error("Alamat Digiflazz tidak sah.");
-  return u;
+async function digi(env,path,options={}){
+  const sess=await getSession(env);const method=(options.method||'GET').toUpperCase();
+  const res=await fetch(BASE+path,{method,headers:{...sessionHeaders(sess,method),...(options.headers||{})},body:options.body?JSON.stringify(options.body):undefined,redirect:'manual'});
+  const text=await res.text();let data=null;try{data=text?JSON.parse(text):null}catch{data=text}
+  if(res.status===401||res.status===403)throw Object.assign(Error('Session Digiflazz expired / ditolak.'),{status:res.status});
+  if(!res.ok)throw Object.assign(Error((data&&typeof data==='object'&&typeof data.message==='string')?data.message:('Digiflazz HTTP '+res.status)),{status:res.status});
+  return data;
 }
-async function getJson(req) {
-  if (!req.headers.get("content-type")?.startsWith("application/json")) throw Error("Gunakan JSON.");
-  const s = await req.text();
-  if (s.length > 100000) throw Error("Permintaan terlalu besar.");
-  return JSON.parse(s || "{}");
-}
-function fromBase64(s) {
-  const data = atob(s.replace(/-/g, "+").replace(/_/g, "/"));
-  return Uint8Array.from(data, x => x.charCodeAt(0));
-}
-function toBase64(bytes) { return btoa(String.fromCharCode(...bytes)); }
-async function sessionKey(secret) {
-  const hash = await crypto.subtle.digest("SHA-256", encoder.encode(secret));
-  return crypto.subtle.importKey("raw", hash, "AES-GCM", false, ["encrypt", "decrypt"]);
-}
-async function seal(data, secret) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await sessionKey(secret), encoder.encode(JSON.stringify(data)));
-  return { encrypted: toBase64(new Uint8Array(cipher)), iv: toBase64(iv) };
-}
-async function unseal(row, secret) {
-  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromBase64(row.iv) }, await sessionKey(secret), fromBase64(row.encrypted_payload));
-  return JSON.parse(decoder.decode(plain));
-}
-function option(source, name) {
-  const clean = name.replace(/[.*+?^$()|[\]\\]/g, "\\$&");
-  const m = source.match(new RegExp("(?:^|\\s)" + clean + "\\s+(?:'([^']*)'|\"([^\"]*)\"|(\\S+))", "i"));
-  return m ? m[1] || m[2] || m[3] || null : null;
-}
-function parseCurl(value) {
-  const source = str(value).replace(/\\\r?\n/g, " ");
-  if (!/^curl\s/i.test(source) || source.length > 100000) throw Error("Masukkan cURL GET dari Digiflazz.");
-  const m = source.match(/['"](https:\/\/[^'"]+)['"]/) || source.match(/\b(https:\/\/[^\s]+)/);
-  if (!m) throw Error("URL HTTPS tidak ditemukan.");
-  const url = hostUrl(m[1]);
-  const method = str(option(source, "-X") || option(source, "--request") || "GET").toUpperCase();
-  if (!["GET", "HEAD"].includes(method)) throw Error("Gunakan request GET/HEAD.");
-  const allowed = new Set(["cookie", "x-csrf-token", "x-xsrf-token", "user-agent", "accept", "x-requested-with"]);
-  const headers = {};
-  for (const h of source.matchAll(/(?:^|\s)(?:-H|--header)\s+(?:'([^']*)'|"([^"]*)")/gi)) {
-    const raw = h[1] || h[2] || "";
-    const at = raw.indexOf(":");
-    if (at > 0) {
-      const name = raw.slice(0, at).trim().toLowerCase();
-      if (allowed.has(name)) headers[name] = raw.slice(at + 1).trim();
-    }
+
+async function settings(env){const out={...DEFAULTS};const r=await env.DB.prepare('SELECT key,value FROM app_settings').all();for(const x of r.results||[])out[x.key]=x.value;return out}
+async function putSetting(env,key,value){await env.DB.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP").bind(key,String(value)).run()}
+async function logChange(env,type,severity,p,field,oldV,newV,meta={}){await env.DB.prepare('INSERT INTO change_log(change_type,severity,product_id,product_code,product_name,field_name,old_value,new_value,meta_json) VALUES(?,?,?,?,?,?,?,?,?)').bind(type,severity,p?.id||null,p?.code||null,p?.product||null,field||null,oldV==null?null:String(oldV),newV==null?null:String(newV),safeJson(meta)).run()}
+async function cacheCategory(env,c){await env.DB.prepare("INSERT INTO category_cache(id,name,synced_at) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET name=excluded.name,synced_at=CURRENT_TIMESTAMP").bind(c.id,c.name).run()}
+async function cacheProduct(env,p,category){
+  const old=await env.DB.prepare('SELECT raw_json FROM product_cache WHERE id=?').bind(p.id).first();let prev=null;try{prev=old?JSON.parse(old.raw_json):null}catch{}
+  if(!prev)await logChange(env,'product_added','info',p,null,null,p.product);
+  else{
+    if(n(prev.price)!==n(p.price))await logChange(env,'price_changed',n(p.price)>n(prev.price)?'warning':'info',p,'price',prev.price,p.price,{percent:n(prev.price)?((n(p.price)-n(prev.price))/n(prev.price))*100:null});
+    if(s(prev.seller)!==s(p.seller))await logChange(env,'seller_changed','warning',p,'seller',prev.seller,p.seller);
+    if(n(prev.status_sellerSku)!==n(p.status_sellerSku))await logChange(env,'seller_status_changed',n(p.status_sellerSku)===1?'info':'critical',p,'status_sellerSku',prev.status_sellerSku,p.status_sellerSku);
+    if(n(prev.max_price)!==n(p.max_price))await logChange(env,'max_price_changed','info',p,'max_price',prev.max_price,p.max_price);
+    if(bool(prev.status)!==bool(p.status))await logChange(env,'product_status_changed',bool(p.status)?'info':'warning',p,'status',prev.status,p.status);
   }
-  headers.cookie ||= option(source, "-b") || option(source, "--cookie");
-  if (!headers.cookie) throw Error("Cookie sesi tidak ditemukan.");
-  return { url: url.toString(), method, headers, capturedAt: new Date().toISOString() };
+  await env.DB.prepare(`INSERT INTO product_cache(id,code,product,product_id,category_id,category_name,brand_id,type_id,max_price,price,seller,seller_sku_id,seller_sku_code,seller_connection_type,seller_sku_desc,stock,unlimited_stock,start_cut_off,end_cut_off,faktur,multi,multi_counter,status,status_sellerSku,last_update,raw_json,synced_at)
+  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+  ON CONFLICT(id) DO UPDATE SET code=excluded.code,product=excluded.product,product_id=excluded.product_id,category_id=excluded.category_id,category_name=excluded.category_name,brand_id=excluded.brand_id,type_id=excluded.type_id,max_price=excluded.max_price,price=excluded.price,seller=excluded.seller,seller_sku_id=excluded.seller_sku_id,seller_sku_code=excluded.seller_sku_code,seller_connection_type=excluded.seller_connection_type,seller_sku_desc=excluded.seller_sku_desc,stock=excluded.stock,unlimited_stock=excluded.unlimited_stock,start_cut_off=excluded.start_cut_off,end_cut_off=excluded.end_cut_off,faktur=excluded.faktur,multi=excluded.multi,multi_counter=excluded.multi_counter,status=excluded.status,status_sellerSku=excluded.status_sellerSku,last_update=excluded.last_update,raw_json=excluded.raw_json,synced_at=CURRENT_TIMESTAMP`).bind(
+    p.id,s(p.code),s(p.product),s(p.product_id),category?.id||p.product_details?.category?.id||'',category?.name||'',p.product_details?.brand?.id||'',p.product_details?.type?.id||'',n(p.max_price),n(p.price),s(p.seller),s(p.seller_sku_id),s(p.seller_sku_code),s(p.seller_connection_type),s(p.seller_sku_desc),n(p.stock),bool(p.unlimited_stock)?1:0,s(p.start_cut_off),s(p.end_cut_off),bool(p.faktur)?1:0,bool(p.multi)?1:0,n(p.multi_counter),bool(p.status)?1:0,n(p.status_sellerSku),s(p.last_update),safeJson(p)
+  ).run();
+  return prev;
 }
-async function authorize(request, env) {
-  if (!env.ACCESS_AUD || !env.ACCESS_TEAM_DOMAIN) return false;
-  const jwt = request.headers.get("cf-access-jwt-assertion");
-  if (!jwt) return false;
-  const parts = jwt.split(".");
-  if (parts.length !== 3) return false;
-  try {
-    const header = JSON.parse(decoder.decode(fromBase64(parts[0])));
-    const payload = JSON.parse(decoder.decode(fromBase64(parts[1])));
-    if (!Array.isArray(payload.aud) || !payload.aud.includes(env.ACCESS_AUD) || payload.exp <= Math.floor(Date.now() / 1000)) return false;
-    const certUrl = "https://" + env.ACCESS_TEAM_DOMAIN + "/cdn-cgi/access/certs";
-    if (!globalThis.__accessCertCache || globalThis.__accessCertCache.expires < Date.now()) {
-      const certs = await fetch(certUrl).then(r => r.json());
-      globalThis.__accessCertCache = { keys: certs.keys || [], expires: Date.now() + 600000 };
-    }
-    const certs = globalThis.__accessCertCache;
-    const jwk = certs.keys?.find(k => k.kid === header.kid);
-    if (!jwk || !["RS256", "ES256"].includes(header.alg)) return false;
-    const algorithm = header.alg === "RS256" ? { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" } : { name: "ECDSA", namedCurve: "P-256" };
-    const key = await crypto.subtle.importKey("jwk", jwk, algorithm, false, ["verify"]);
-    const verifyParams = header.alg === "ES256" ? { name: "ECDSA", hash: "SHA-256" } : algorithm;
-    return crypto.subtle.verify(verifyParams, key, fromBase64(parts[2]), encoder.encode(parts[0] + "." + parts[1]));
-  } catch { return false; }
+function unhealthy(p){return !p.seller_sku_id||!p.seller||p.seller==='-'||n(p.status_sellerSku)!==1||!bool(p.status)||(n(p.max_price)>0&&n(p.price)>n(p.max_price))}
+async function prefSets(env){const r=await env.DB.prepare('SELECT seller_name,mode FROM seller_preferences').all();const preferred=new Set(),blocked=new Set();for(const x of r.results||[]){if(x.mode==='preferred')preferred.add(norm(x.seller_name));if(x.mode==='blocked')blocked.add(norm(x.seller_name))}return{preferred,blocked}}
+function setMatches(set,name){const x=norm(name);return [...set].some(v=>v&&x&&(x.includes(v)||v.includes(x)))}
+function sellerScore(seller,minPrice,sets,cfg){
+  const price=n(seller.price);const priceScore=minPrice>0?Math.max(0,100-((price-minPrice)/minPrice)*100):0;
+  const conn=String(seller.connectionType||'').toUpperCase();const connScore=conn==='IP'?100:conn==='H2H'?70:50;
+  const sla=String(seller.seller_details?.sla||'').toUpperCase();const slaScore=sla.includes('H+0')?100:sla.includes('H+1')?60:sla.includes('H+2')?30:0;
+  const stockScore=bool(seller.unlimited_stock)||n(seller.stock)>0?100:0;
+  const review=n(seller.reviewAvg);const reviewBonus=(review/5)*n(cfg.review_bonus_max,15);
+  const preferredBonus=setMatches(sets.preferred,seller.seller)?20:0;
+  return Math.round((priceScore*.4+connScore*.3+slaScore*.2+stockScore*.1+reviewBonus+preferredBonus)*10)/10;
 }
-async function conn(env) {
-  return env.DB.prepare("SELECT encrypted_payload,iv,source_host,last_test_status,last_test_at,updated_at FROM digiflazz_connections WHERE id=1").first();
+async function rankedSellers(env,product,cfg=null){
+  cfg=cfg||await settings(env);const sets=await prefSets(env);const data=await digi(env,'/api/v1/buyer/product/seller/'+encodeURIComponent(product.id));const all=Array.isArray(data?.data)?data.data:[];
+  const minRating=n(cfg.min_rating,0),maxInc=n(cfg.max_price_increase_percent,10),basePrice=Math.max(1,n(product.price));
+  const viable=all.filter(x=>bool(x.status)&&n(x.status_sellerSku)===1&&!setMatches(sets.blocked,x.seller)&&(bool(x.unlimited_stock)||n(x.stock)>0)&&n(x.reviewAvg)>=minRating);
+  const threshold=unhealthy(product)?Infinity:basePrice*(1+maxInc/100);
+  const filtered=viable.filter(x=>n(x.price)<=threshold);
+  const minPrice=Math.min(...filtered.map(x=>n(x.price)).filter(x=>x>0),Infinity);
+  const scored=filtered.map(x=>({...x,score:sellerScore(x,Number.isFinite(minPrice)?minPrice:0,sets,cfg),preferred:setMatches(sets.preferred,x.seller),blocked:false})).sort((a,b)=>b.score-a.score||n(a.price)-n(b.price));
+  await env.DB.prepare('DELETE FROM product_seller_cache WHERE product_id=?').bind(product.id).run();
+  for(const x of scored.slice(0,100)){await env.DB.prepare("INSERT INTO product_seller_cache(product_id,seller_sku_id,seller_name,price,score,raw_json,synced_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)").bind(product.id,s(x.id),s(x.seller),n(x.price),n(x.score),safeJson(x)).run()}
+  return scored;
 }
-async function remote(env, path) {
-  const row = await conn(env);
-  if (!row || !env.SESSION_ENCRYPTION_KEY) throw Error("Sesi Digiflazz belum terhubung.");
-  const session = await unseal(row, env.SESSION_ENCRYPTION_KEY);
-  const target = hostUrl("https://member.digiflazz.com" + path);
-  const headers = { ...session.headers, accept: "application/json, text/html;q=0.9" };
-  delete headers.host;
-  const res = await fetch(target, { method: "GET", headers, redirect: "manual", signal: AbortSignal.timeout(20000) });
-  if (res.status === 401 || res.status === 403 || (res.status >= 300 && res.status < 400)) throw Error("Sesi Digiflazz kedaluwarsa atau ditolak (HTTP " + res.status + ").");
-  if (!res.ok) throw Error("Digiflazz mengembalikan HTTP " + res.status + " untuk " + target.pathname);
-  return res;
+function applySeller(product,seller,preserve=true){return {...product,max_price:preserve?Math.max(n(product.max_price),n(seller.price)):n(seller.price),price:n(seller.price),stock:n(seller.stock),start_cut_off:s(seller.start_cut_off),end_cut_off:s(seller.end_cut_off),faktur:bool(seller.faktur),multi:bool(seller.multi),multi_counter:n(seller.multi_counter),unlimited_stock:bool(seller.unlimited_stock),seller:s(seller.seller),seller_sku_id:s(seller.id),seller_sku_id_int:n(seller.id_int),seller_sku_code:s(seller.seller_sku_code),seller_connection_type:s(seller.connectionType),seller_sku_desc:s(seller.deskripsi),status:bool(seller.status),status_sellerSku:n(seller.status_sellerSku),isDuplicateCode:false,isDuplicateSeller:false}}
+async function switchProduct(env,product,seller,reason='manual'){
+  const cfg=await settings(env);const locked=await env.DB.prepare('SELECT buyer_sku_code FROM product_locks WHERE buyer_sku_code=?').bind(product.id).first();if(locked&&reason!=='manual')return{skipped:true,reason:'locked'};
+  const updated=applySeller(product,seller,cfg.preserve_max_price!=='0');
+  const out=await digi(env,'/api/v1/buyer/product/update/multiple',{method:'POST',body:{products:[updated]}});
+  await env.DB.prepare('INSERT INTO switch_history(buyer_sku_code,from_seller,to_seller,reason,previous_price,new_price,status) VALUES(?,?,?,?,?,?,?)').bind(product.id,s(product.seller),s(seller.seller),reason,n(product.price),n(seller.price),'success').run();
+  await logChange(env,'seller_switched',reason==='manual'?'info':'warning',product,'seller',product.seller,seller.seller,{reason,fromPrice:n(product.price),toPrice:n(seller.price),score:n(seller.score)});
+  const cached=await env.DB.prepare('SELECT category_id,category_name FROM product_cache WHERE id=?').bind(product.id).first();
+  await cacheProduct(env,updated,{id:cached?.category_id||updated.product_details?.category?.id||'',name:cached?.category_name||''});
+  return{ok:true,message:out?.message||'Seller berhasil diganti',product:updated};
 }
-async function remoteJson(env, path) {
-  const res = await remote(env, path);
-  if (!res.headers.get("content-type")?.includes("json")) throw Error("Digiflazz tidak mengembalikan JSON untuk " + path);
-  return res.json();
-}
-function listOf(obj, keys) {
-  if (Array.isArray(obj)) return obj;
-  for (const k of keys) {
-    const parts = k.split(".");
-    const v = parts.reduce((a, p) => a?.[p], obj);
-    if (Array.isArray(v)) return v;
-  }
-  return null;
-}
-function normalizeProduct(x) {
-  const sku = str(x.buyer_sku_code ?? x.buyerSkuCode ?? x.sku ?? x.code);
-  if (!sku) return null;
-  const seller = x.seller || x.supplier || {};
-  const product = x.product || {};
-  return {
-    sku, product_id: str(x.product_id ?? product.id ?? x.id),
-    name: str(x.product_name ?? x.name ?? product.name ?? sku),
-    category: str(x.category?.name ?? x.category ?? product.category),
-    brand: str(x.brand?.name ?? x.brand ?? product.brand),
-    product_type: str(x.type?.name ?? x.type ?? product.type),
-    seller_id: str(x.seller_id ?? seller.id ?? x.supplier_id),
-    seller_name: str(x.seller_name ?? seller.name ?? x.supplier_name),
-    price: bounded(x.price ?? x.seller_price ?? x.cost, 0, 1000000000, 0),
-    max_price: bounded(x.max_price ?? x.maxPrice, 0, 1000000000, 0),
-    active: bool(x.buyer_product_status ?? x.status ?? x.is_active) ? 1 : 0,
-    seller_active: bool(x.seller_product_status ?? seller.active ?? x.is_seller_active ?? true) ? 1 : 0,
-    stock: x.stock == null ? null : bounded(x.stock, 0, 1000000000, 0),
-    unlimited_stock: bool(x.unlimited_stock ?? x.unlimitedStock) ? 1 : 0,
-    end_cut_off: str(x.end_cut_off ?? seller.end_cut_off),
-    raw: JSON.stringify(x).slice(0, 40000)
-  };
-}
-function normalizeSeller(x) {
-  const id = str(x.id ?? x.seller_id ?? x.company_id ?? x.name ?? x.seller_name);
-  if (!id) return null;
-  return {
-    seller_id: id, name: str(x.company_name ?? x.seller_name ?? x.name ?? id),
-    rating: x.review_avg == null && x.rating == null ? null : bounded(x.review_avg ?? x.rating, 0, 5, 0),
-    review_count: x.review_count == null ? null : bounded(x.review_count, 0, 10000000),
-    product_count: x.product_count == null ? null : bounded(x.product_count, 0, 10000000),
-    invoice: x.tax_invoice == null ? null : bool(x.tax_invoice) ? 1 : 0,
-    raw: JSON.stringify(x).slice(0, 20000)
-  };
-}
-async function log(env, level, kind, message, sku = null) {
-  await env.DB.prepare("INSERT INTO events(level,kind,sku,message) VALUES(?,?,?,?)").bind(level, kind, sku, String(message).slice(0, 400)).run();
-}
-async function settings(env) {
-  const rows = await env.DB.prepare("SELECT key,value FROM app_settings").all();
-  const values = { ...DEFAULTS };
-  for (const r of rows.results) {
-    if (r.key in DEFAULTS) {
-      try { values[r.key] = JSON.parse(r.value); } catch {}
-    }
-  }
-  return values;
-}
-function validateSettings(input, current) {
-  const next = { ...current };
-  for (const [key, value] of Object.entries(input)) {
-    if (!(key in DEFAULTS)) continue;
-    if (["scanEnabled","dryRun","autoSwitch","preserveMaxPrice","autoFillMaxPrice","proactiveScan","autoRandomCode"].includes(key)) next[key] = bool(value);
-    else if (["minRating","minReviews","priceCap","scanIntervalMinutes","reoptimizeHours","minSavingsPercent","cooldownHours"].includes(key)) {
-      const limits = {minRating:[0,5],minReviews:[0,100000],priceCap:[0,1000000000],scanIntervalMinutes:[5,1440],reoptimizeHours:[0,720],minSavingsPercent:[0,100],cooldownHours:[1,720]};
-      next[key] = bounded(value, ...limits[key], current[key]);
-    } else if (key === "saveMode" && ["manual","auto"].includes(value)) next[key] = value;
-    else if (key === "weights") {
-      const w = Object.fromEntries(["price","connection","sla","stock"].map(k => [k, bounded(value?.[k],0,100,0)]));
-      if (Object.values(w).reduce((a,b)=>a+b,0) !== 100) throw Error("Total bobot harus 100%.");
-      next.weights = w;
-    }
-  }
-  // Switching requires a separately verified connector. A settings toggle cannot authorize an unknown request.
-  if (next.autoSwitch && !next.dryRun) throw Error("Auto-switch live menunggu endpoint Digiflazz yang terverifikasi.");
-  return next;
-}
-async function scan(env, reason = "manual") {
-  const created = await env.DB.prepare("INSERT INTO scan_runs(status) VALUES('running')").run();
-  const runId = created.meta.last_row_id;
-  try {
-    const data = await remoteJson(env, "/api/v1/buyer/product");
-    const items = listOf(data, ["data.data", "data.products", "data.items", "data", "products", "items", "result.data", "result"]);
-    if (!items) throw Error("Format katalog belum dikenali; kunci respons: " + Object.keys(data || {}).slice(0, 10).join(", "));
-    const products = items.map(normalizeProduct).filter(Boolean);
-    if (items.length && !products.length) throw Error("Data produk tidak memiliki SKU yang dikenali.");
-    let issues = 0;
-    for (let i=0;i<products.length;i+=100) {
-      const chunk = products.slice(i,i+100);
-      const old = await env.DB.prepare("SELECT sku,price,seller_name,active FROM products WHERE sku IN (" + chunk.map(()=>"?").join(",") + ")").bind(...chunk.map(x=>x.sku)).all();
-      const before = new Map(old.results.map(x=>[x.sku,x]));
-      const queries = [];
-      for (const p of chunk) {
-        const previous = before.get(p.sku);
-        const problem = !p.seller_name || !p.seller_active || (p.max_price > 0 && p.price > p.max_price) || (!p.unlimited_stock && p.stock === 0);
-        if (problem) issues++;
-        queries.push(env.DB.prepare("INSERT INTO products(sku,product_id,name,category,brand,product_type,seller_id,seller_name,price,max_price,active,seller_active,stock,unlimited_stock,end_cut_off,raw,last_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(sku) DO UPDATE SET product_id=excluded.product_id,name=excluded.name,category=excluded.category,brand=excluded.brand,product_type=excluded.product_type,seller_id=excluded.seller_id,seller_name=excluded.seller_name,price=excluded.price,max_price=excluded.max_price,active=excluded.active,seller_active=excluded.seller_active,stock=excluded.stock,unlimited_stock=excluded.unlimited_stock,end_cut_off=excluded.end_cut_off,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_id,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.end_cut_off,p.raw));
-        if (previous && previous.price !== p.price) {
-          queries.push(env.DB.prepare("INSERT INTO price_history(buyer_sku_code,seller_name,price) VALUES(?,?,?)").bind(p.sku,p.seller_name,p.price));
-          queries.push(env.DB.prepare("INSERT INTO events(level,kind,sku,message) VALUES('INFO','price',?,?)").bind(p.sku,"Harga berubah Rp"+previous.price+" → Rp"+p.price));
-        }
-        if (previous && previous.seller_name !== p.seller_name) queries.push(env.DB.prepare("INSERT INTO events(level,kind,sku,message) VALUES('INFO','seller',?,?)").bind(p.sku,"Seller berubah: "+(previous.seller_name||"—")+" → "+(p.seller_name||"—")));
-        const embedded = listOf(JSON.parse(p.raw), ["sellers","suppliers","seller_products","alternatives"]);
-        if (embedded) for (const raw of embedded.slice(0,100)) {
-          const s = normalizeSeller(raw); if (!s) continue;
-          const price = bounded(raw.price,0,1000000000);
-          queries.push(env.DB.prepare("INSERT INTO seller_options(sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description,raw,last_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(sku,seller_id) DO UPDATE SET seller_name=excluded.seller_name,price=excluded.price,rating=excluded.rating,stock=excluded.stock,unlimited_stock=excluded.unlimited_stock,connection=excluded.connection,sla=excluded.sla,description=excluded.description,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(p.sku,s.seller_id,s.name,price,s.rating,raw.stock??null,bool(raw.unlimited_stock)?1:0,str(raw.connection),str(raw.sla),str(raw.desc??raw.description),JSON.stringify(raw).slice(0,20000)));
-        }
+async function refreshGlobalSellers(env){try{const data=await digi(env,'/api/v1/buyer/seller');const list=Array.isArray(data?.data)?data.data:[];for(const x of list){const name=s(x.company_name||x.seller||x.name),key=s(x.id||x.seller_id||name);await env.DB.prepare(`INSERT INTO seller_cache(seller_key,company_name,review_avg,product_qty,faktur_pajak,is_seller_favorite,last_seen,raw_json,synced_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(seller_key) DO UPDATE SET company_name=excluded.company_name,review_avg=excluded.review_avg,product_qty=excluded.product_qty,faktur_pajak=excluded.faktur_pajak,is_seller_favorite=excluded.is_seller_favorite,last_seen=excluded.last_seen,raw_json=excluded.raw_json,synced_at=CURRENT_TIMESTAMP`).bind(key,name,n(x.review_avg??x.reviewAvg),n(x.product_qty),bool(x.faktur_pajak??x.faktur)?1:0,bool(x.is_seller_favorite)?1:0,s(x.last_seen),safeJson(x)).run()}return list.length}catch{return 0}}
+async function runSync(env,{allowSwitch=false,source='manual'}={}){
+  const ins=await env.DB.prepare("INSERT INTO monitor_runs(status,started_at) VALUES('running',CURRENT_TIMESTAMP)").run();const runId=ins.meta?.last_row_id||0;let seen=0,bad=0,switches=0,better=0;
+  try{
+    const cfg=await settings(env);const categoriesData=await digi(env,'/api/v1/buyer/product/category');const categories=Array.isArray(categoriesData?.data)?categoriesData.data:[];
+    for(const c of categories){await cacheCategory(env,c);const detail=await digi(env,'/api/v1/buyer/product/category/'+encodeURIComponent(c.id));const products=Array.isArray(detail?.data)?detail.data:[];
+      for(const p of products){seen++;const prev=await cacheProduct(env,p,c);if(unhealthy(p))bad++;
+        if(allowSwitch&&cfg.auto_switch==='1'&&switches<20&&unhealthy(p)){const lock=await env.DB.prepare('SELECT 1 AS x FROM product_locks WHERE buyer_sku_code=?').bind(p.id).first();if(!lock){const ranked=await rankedSellers(env,p,cfg);const best=ranked.find(x=>s(x.id)!==s(p.seller_sku_id));if(best){try{await switchProduct(env,p,best,'auto_unhealthy');switches++}catch(e){await env.DB.prepare('INSERT INTO switch_history(buyer_sku_code,from_seller,to_seller,reason,previous_price,new_price,status) VALUES(?,?,?,?,?,?,?)').bind(p.id,s(p.seller),s(best.seller),'auto_unhealthy',n(p.price),n(best.price),'failed').run()}}}}
+        if(cfg.proactive_enabled==='1'&&prev&&!unhealthy(p)&&n(prev.price)>0&&n(p.price)>n(prev.price)){const rise=((n(p.price)-n(prev.price))/n(prev.price))*100;if(rise>=3){const ranked=await rankedSellers(env,p,cfg);const best=ranked.find(x=>s(x.id)!==s(p.seller_sku_id));if(best&&n(best.price)<n(p.price)){const saving=((n(p.price)-n(best.price))/n(p.price))*100;if(saving>=n(cfg.proactive_min_savings_percent,5)){better++;await logChange(env,'better_seller_available','warning',p,'seller',p.seller,best.seller,{currentPrice:n(p.price),betterPrice:n(best.price),savingPercent:saving,score:n(best.score)});if(allowSwitch&&cfg.auto_switch==='1'&&switches<20){try{await switchProduct(env,p,best,'auto_proactive');switches++}catch{}}}}}}
       }
-      for (let j=0;j<queries.length;j+=80) await env.DB.batch(queries.slice(j,j+80));
     }
-    try {
-      const sd = await remoteJson(env, "/api/v1/buyer/seller");
-      const sellers = listOf(sd,["data.data","data.sellers","data","sellers","result.data","result"]) || [];
-      const stmts = sellers.map(normalizeSeller).filter(Boolean).map(x=>env.DB.prepare("INSERT INTO sellers(seller_id,name,rating,review_count,product_count,invoice,raw,last_seen) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(seller_id) DO UPDATE SET name=excluded.name,rating=excluded.rating,review_count=excluded.review_count,product_count=excluded.product_count,invoice=excluded.invoice,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(x.seller_id,x.name,x.rating,x.review_count,x.product_count,x.invoice,x.raw));
-      for(let i=0;i<stmts.length;i+=80) await env.DB.batch(stmts.slice(i,i+80));
-    } catch (error) { await log(env,"WARN","sellers",error.message); }
-    await env.DB.prepare("UPDATE scan_runs SET status='success',finished_at=CURRENT_TIMESTAMP,total=?,issues=?,message=? WHERE id=?").bind(products.length,issues,reason,runId).run();
-    await log(env,"INFO","scan",products.length+" produk dipindai; "+issues+" perlu perhatian.");
-    return { ok:true,total:products.length,issues };
-  } catch (error) {
-    await env.DB.prepare("UPDATE scan_runs SET status='error',finished_at=CURRENT_TIMESTAMP,message=? WHERE id=?").bind(error.message,runId).run();
-    await log(env,"ERROR","scan",error.message);
-    throw error;
-  }
+    await refreshGlobalSellers(env);
+    await env.DB.prepare("UPDATE monitor_runs SET status='success',products_seen=?,unhealthy_count=?,switches_count=?,better_seller_count=?,finished_at=CURRENT_TIMESTAMP WHERE id=?").bind(seen,bad,switches,better,runId).run();
+    await putSetting(env,'last_sync_at',new Date().toISOString());return{ok:true,products:seen,unhealthy:bad,switches,better,categories:categories.length};
+  }catch(e){await env.DB.prepare("UPDATE monitor_runs SET status='failed',products_seen=?,unhealthy_count=?,switches_count=?,better_seller_count=?,error_text=?,finished_at=CURRENT_TIMESTAMP WHERE id=?").bind(seen,bad,switches,better,e instanceof Error?e.message:String(e),runId).run();throw e}
 }
-function rank(product, rows, prefs, rule, config, zone) {
-  const blocked = new Set(prefs.filter(p=>p.mode==="blocked").map(p=>p.seller_name.toLowerCase()));
-  const preferred = new Set(prefs.filter(p=>p.mode==="preferred").map(p=>p.seller_name.toLowerCase()));
-  const max = rule?.max_price || product.max_price || config.priceCap || Infinity;
-  const minRating = rule?.min_rating ?? config.minRating;
-  return rows.map(x => {
-    const reasons = [];
-    const name = x.seller_name.toLowerCase();
-    if (blocked.has(name)) reasons.push("Seller diblokir");
-    if (x.price > max) reasons.push("Harga di atas batas");
-    if (x.rating != null && x.rating < minRating) reasons.push("Rating kurang");
-    if (rule?.require_stock !== 0 && !x.unlimited_stock && x.stock === 0) reasons.push("Stok habis");
-    if (rule?.avoid_cutoff !== 0 && x.end_cut_off && x.end_cut_off !== "00:00") {
-      const now = new Date();
-      const clock = new Intl.DateTimeFormat("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"Asia/Jakarta"}).format(now);
-      if (clock >= x.end_cut_off) reasons.push("Lewat cut-off");
-    }
-    if (zone && !zone.patterns.every(p=>x.description.toLowerCase().includes(p.toLowerCase()))) reasons.push("Zona tidak cocok");
-    const peers = rows.map(s=>s.price).filter(n=>n>0), low=Math.min(...peers), high=Math.max(...peers);
-    const price = high===low ? 100 : 100*(high-x.price)/(high-low);
-    const connection = /ip/i.test(x.connection) ? 100 : /h2h/i.test(x.connection) ? 70 : 50;
-    const sla = /h\+?0/i.test(x.sla) ? 100 : /h\+?1/i.test(x.sla) ? 60 : 30;
-    const stock = x.unlimited_stock ? 100 : x.stock > 0 ? 70 : 0;
-    const w=config.weights;
-    const score = Math.round(price*w.price/100+connection*w.connection/100+sla*w.sla/100+stock*w.stock/100+(x.rating||0)*3+(preferred.has(name)?20:0));
-    return { ...x, eligible:!reasons.length, reasons, score };
-  }).sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score||a.price-b.price);
+
+function requireAccess(request){return request.headers.get('cf-access-jwt-assertion')?null:json({ok:false,error:'Cloudflare Access authentication required.'},401)}
+async function readJson(request){try{return await request.json()}catch{return{}}}
+async function getProduct(env,id){const r=await env.DB.prepare('SELECT raw_json FROM product_cache WHERE id=?').bind(id).first();if(!r)throw Object.assign(Error('Produk tidak ditemukan. Jalankan Sync.'),{status:404});return JSON.parse(r.raw_json)}
+
+async function api(request,env,url){
+  if(url.pathname==='/api/health'){let database=false;try{await env.DB.prepare('SELECT 1').first();database=true}catch{}return json({ok:true,service:'digiflazz-tools',database})}
+  const denied=requireAccess(request);if(denied)return denied;
+  try{
+    if(url.pathname==='/api/connection/status'&&request.method==='GET'){const r=await getConnection(env);return json({ok:true,connected:Boolean(r),sourceHost:r?.source_host||null,lastTestStatus:r?.last_test_status||null,lastTestAt:r?.last_test_at||null,updatedAt:r?.updated_at||null})}
+    if(url.pathname==='/api/connection'&&request.method==='POST'){const body=await readJson(request),session=parseCurl(body.curl||''),sealed=await seal(session,env.SESSION_ENCRYPTION_KEY),host=new URL(session.url).hostname;await env.DB.prepare("INSERT INTO digiflazz_connections(id,encrypted_payload,iv,source_host,created_at,updated_at) VALUES(1,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET encrypted_payload=excluded.encrypted_payload,iv=excluded.iv,source_host=excluded.source_host,last_test_status=NULL,last_test_at=NULL,updated_at=CURRENT_TIMESTAMP").bind(sealed.encrypted,sealed.iv,host).run();return json({ok:true,saved:true,sourceHost:host})}
+    if(url.pathname==='/api/connection/test'&&request.method==='POST'){const sess=await getSession(env),target=new URL(sess.url);if(!isDigi(target.hostname))throw Error('Host session tidak valid.');const res=await fetch(target.toString(),{method:'GET',headers:sessionHeaders(sess),redirect:'manual'});const location=res.headers.get('location')||'',connected=res.status>=200&&res.status<400&&!/login|signin|auth/i.test(location);await env.DB.prepare('UPDATE digiflazz_connections SET last_test_status=?,last_test_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=1').bind(res.status).run();return json({ok:true,connected,httpStatus:res.status,message:connected?'Session Digiflazz aktif.':'Session perlu diperbarui.'})}
+    if(url.pathname==='/api/connection'&&request.method==='DELETE'){await env.DB.prepare('DELETE FROM digiflazz_connections WHERE id=1').run();return json({ok:true})}
+    if(url.pathname==='/api/state'&&request.method==='GET'){const cfg=await settings(env);const conn=await getConnection(env);const counts=await env.DB.prepare(`SELECT COUNT(*) total,SUM(CASE WHEN status_sellerSku!=1 OR status=0 OR seller_sku_id='' OR price>max_price THEN 1 ELSE 0 END) unhealthy FROM product_cache`).first();const locked=await env.DB.prepare('SELECT COUNT(*) c FROM product_locks').first();const lastRun=await env.DB.prepare('SELECT * FROM monitor_runs ORDER BY id DESC LIMIT 1').first();return json({ok:true,connection:{connected:Boolean(conn),lastTestStatus:conn?.last_test_status||null},settings:cfg,counts:{products:n(counts?.total),unhealthy:n(counts?.unhealthy),locked:n(locked?.c)},lastRun})}
+    if(url.pathname==='/api/sync'&&request.method==='POST'){const out=await runSync(env,{allowSwitch:false,source:'manual'});return json(out)}
+    if(url.pathname==='/api/settings'&&request.method==='GET')return json({ok:true,settings:await settings(env)});
+    if(url.pathname==='/api/settings'&&request.method==='POST'){const body=await readJson(request);const allowed=Object.keys(DEFAULTS);for(const k of allowed){if(Object.prototype.hasOwnProperty.call(body,k))await putSetting(env,k,body[k])}return json({ok:true,settings:await settings(env)})}
+    if(url.pathname==='/api/categories'&&request.method==='GET'){const r=await env.DB.prepare('SELECT id,name,synced_at FROM category_cache ORDER BY name').all();return json({ok:true,data:r.results||[]})}
+    if(url.pathname==='/api/products'&&request.method==='GET'){const q=(url.searchParams.get('q')||'').trim(),cat=url.searchParams.get('category')||'',status=url.searchParams.get('status')||'all';let sql=`SELECT p.*,CASE WHEN l.buyer_sku_code IS NULL THEN 0 ELSE 1 END locked FROM product_cache p LEFT JOIN product_locks l ON l.buyer_sku_code=p.id WHERE 1=1`,bind=[];if(q){sql+=' AND (p.product LIKE ? OR p.code LIKE ? OR p.seller LIKE ?)';const x='%'+q+'%';bind.push(x,x,x)}if(cat){sql+=' AND p.category_id=?';bind.push(cat)}if(status==='bad')sql+=" AND (p.status_sellerSku!=1 OR p.status=0 OR p.seller_sku_id='' OR p.price>p.max_price)";if(status==='ok')sql+=" AND p.status_sellerSku=1 AND p.status=1 AND p.seller_sku_id!='' AND p.price<=p.max_price";sql+=' ORDER BY p.category_name,p.product LIMIT 1000';const r=await env.DB.prepare(sql).bind(...bind).all();return json({ok:true,data:(r.results||[]).map(x=>({...x,raw_json:undefined}))})}
+    if(url.pathname==='/api/sellers'&&request.method==='GET'){await refreshGlobalSellers(env);const r=await env.DB.prepare(`SELECT s.*,CASE WHEN p.mode='preferred' THEN 1 ELSE 0 END preferred,CASE WHEN b.mode='blocked' THEN 1 ELSE 0 END blocked FROM seller_cache s LEFT JOIN seller_preferences p ON lower(p.seller_name)=lower(s.company_name) AND p.mode='preferred' LEFT JOIN seller_preferences b ON lower(b.seller_name)=lower(s.company_name) AND b.mode='blocked' ORDER BY review_avg DESC,company_name`).all();return json({ok:true,data:(r.results||[]).map(x=>({...x,raw_json:undefined}))})}
+    if(url.pathname==='/api/seller-preference'&&request.method==='POST'){const body=await readJson(request),name=s(body.seller),mode=s(body.mode);if(!name)throw Object.assign(Error('Seller wajib diisi.'),{status:400});await env.DB.prepare('DELETE FROM seller_preferences WHERE lower(seller_name)=lower(?)').bind(name).run();if(mode==='preferred'||mode==='blocked')await env.DB.prepare('INSERT INTO seller_preferences(seller_name,mode) VALUES(?,?)').bind(name,mode).run();return json({ok:true})}
+    if(url.pathname==='/api/changes'&&request.method==='GET'){const hours=Math.min(168,Math.max(1,n(url.searchParams.get('hours'),24)));const r=await env.DB.prepare("SELECT * FROM change_log WHERE created_at>=datetime('now',?) ORDER BY id DESC LIMIT 500").bind('-'+hours+' hours').all();return json({ok:true,data:r.results||[]})}
+    if(url.pathname==='/api/switch-history'&&request.method==='GET'){const r=await env.DB.prepare('SELECT * FROM switch_history ORDER BY id DESC LIMIT 300').all();return json({ok:true,data:r.results||[]})}
+    if(url.pathname==='/api/zones'&&request.method==='GET'){const rules=await env.DB.prepare('SELECT * FROM zone_rules ORDER BY name').all(),groups=await env.DB.prepare('SELECT * FROM zone_groups ORDER BY name').all(),assign=await env.DB.prepare('SELECT * FROM zone_assignments').all();return json({ok:true,rules:rules.results||[],groups:groups.results||[],assignments:assign.results||[]})}
+    if(url.pathname==='/api/zones/rule'&&request.method==='POST'){const body=await readJson(request);if(body.id)await env.DB.prepare('UPDATE zone_rules SET name=?,patterns_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').bind(s(body.name),safeJson(body.patterns||[]),body.id).run();else await env.DB.prepare('INSERT INTO zone_rules(name,patterns_json) VALUES(?,?)').bind(s(body.name),safeJson(body.patterns||[])).run();return json({ok:true})}
+    const sellerMatch=url.pathname.match(/^\/api\/products\/([^/]+)\/sellers$/);if(sellerMatch&&request.method==='GET'){const product=await getProduct(env,decodeURIComponent(sellerMatch[1])),ranked=await rankedSellers(env,product);return json({ok:true,product:{id:product.id,product:product.product,seller:product.seller,price:product.price,max_price:product.max_price},data:ranked})}
+    const switchMatch=url.pathname.match(/^\/api\/products\/([^/]+)\/switch$/);if(switchMatch&&request.method==='POST'){const id=decodeURIComponent(switchMatch[1]),body=await readJson(request),product=await getProduct(env,id),ranked=await rankedSellers(env,product),seller=ranked.find(x=>s(x.id)===s(body.sellerId));if(!seller)throw Object.assign(Error('Seller tidak ditemukan / tidak lolos filter.'),{status:400});return json(await switchProduct(env,product,seller,'manual'))}
+    const lockMatch=url.pathname.match(/^\/api\/products\/([^/]+)\/lock$/);if(lockMatch&&request.method==='POST'){const id=decodeURIComponent(lockMatch[1]),body=await readJson(request);if(body.locked)await env.DB.prepare("INSERT INTO product_locks(buyer_sku_code,reason) VALUES(?,?) ON CONFLICT(buyer_sku_code) DO UPDATE SET reason=excluded.reason").bind(id,s(body.reason)||'manual').run();else await env.DB.prepare('DELETE FROM product_locks WHERE buyer_sku_code=?').bind(id).run();return json({ok:true,locked:Boolean(body.locked)})}
+    return json({ok:false,error:'Not found.'},404);
+  }catch(e){return json({ok:false,error:e instanceof Error?e.message:String(e)},e?.status||500)}
 }
-async function discover(env) {
-  const res = await remote(env,"/buyer-area");
-  const html = (await res.text()).slice(0,750000);
-  const scripts = [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map(x=>x[1]).filter(x=>!x.startsWith("//")).slice(0,12);
-  const found = new Set();
-  for (const src of scripts) {
-    let target;
-    try { target = new URL(src,"https://member.digiflazz.com"); hostUrl(target.toString()); } catch { continue; }
-    try {
-      const r = await remote(env,target.pathname+target.search);
-      if (!/javascript|text\/plain/.test(r.headers.get("content-type")||"")) continue;
-      const text = (await r.text()).slice(0,1500000);
-      for (const m of text.matchAll(/\/api\/v1\/buyer\/[a-zA-Z0-9_/$?{}.:+-]+/g)) found.add(m[0].slice(0,200));
-    } catch {}
-  }
-  const paths = [...found].slice(0,300);
-  for (const path of paths) await env.DB.prepare("INSERT INTO api_discovery(route,source_url,context) VALUES(?,?,?) ON CONFLICT(route) DO NOTHING").bind(path,"https://member.digiflazz.com/buyer-area","script reference").run();
-  await log(env,"INFO","discovery",paths.length+" jalur API ditemukan; belum ada aksi write yang diaktifkan.");
-  return {ok:true,count:paths.length,paths};
-}
-async function api(req, env, url) {
-  const path=url.pathname, method=req.method;
-  try {
-    if (method==="GET" && path==="/api/health") {
-      await env.DB.prepare("SELECT 1").first();
-      return reply({ok:true,service:"digiflazz-tools"});
-    }
-    if (!await authorize(req,env)) return failure("Akses pribadi diperlukan.",401);
-    if (method!=="GET" && method!=="HEAD" && req.headers.get("origin")!==url.origin) return failure("Asal permintaan tidak sah.",403);
-    if (method==="GET" && path==="/api/bootstrap") {
-      const [c, cfg, count, sellerCount, last, events]=await Promise.all([
-        conn(env),settings(env),
-        env.DB.prepare("SELECT count(*) total,sum(CASE WHEN seller_name='' OR seller_active=0 OR (max_price>0 AND price>max_price) OR (stock=0 AND unlimited_stock=0) THEN 1 ELSE 0 END) issues FROM products").first(),
-        env.DB.prepare("SELECT count(*) total FROM sellers").first(),
-        env.DB.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").first(),
-        env.DB.prepare("SELECT id,level,kind,sku,message,created_at FROM events ORDER BY id DESC LIMIT 8").all()
-      ]);
-      return reply({ok:true,connection:{connected:!!c,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at},settings:cfg,counts:{products:count.total,issues:count.issues||0,sellers:sellerCount.total},lastScan:last,events:events.results,liveSwitchAvailable:false});
-    }
-    if (method==="GET" && path==="/api/connection/status") {
-      const c=await conn(env);
-      return reply({ok:true,connected:!!c,sourceHost:c?.source_host,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at,updatedAt:c?.updated_at});
-    }
-    if (method==="POST" && path==="/api/connection") {
-      if (!env.SESSION_ENCRYPTION_KEY) return failure("Secret enkripsi belum terpasang.",503);
-      const body=await getJson(req), data=parseCurl(body.curl), sealed=await seal(data,env.SESSION_ENCRYPTION_KEY);
-      await env.DB.prepare("INSERT INTO digiflazz_connections(id,encrypted_payload,iv,source_host) VALUES(1,?,?,'member.digiflazz.com') ON CONFLICT(id) DO UPDATE SET encrypted_payload=excluded.encrypted_payload,iv=excluded.iv,last_test_status=NULL,last_test_at=NULL,updated_at=CURRENT_TIMESTAMP").bind(sealed.encrypted,sealed.iv).run();
-      await log(env,"INFO","connection","Sesi Digiflazz diperbarui.");
-      return reply({ok:true,saved:true});
-    }
-    if (method==="POST" && path==="/api/connection/test") {
-      const c=await conn(env); if (!c) return failure("Belum ada sesi.",404);
-      const data=await unseal(c,env.SESSION_ENCRYPTION_KEY);
-      const target=hostUrl(data.url);
-      const res=await fetch(target,{method:data.method,headers:data.headers,redirect:"manual",signal:AbortSignal.timeout(20000)});
-      const good=res.status>=200&&res.status<300;
-      await env.DB.prepare("UPDATE digiflazz_connections SET last_test_status=?,last_test_at=CURRENT_TIMESTAMP WHERE id=1").bind(res.status).run();
-      return reply({ok:true,connected:good,httpStatus:res.status});
-    }
-    if (method==="DELETE" && path==="/api/connection") {
-      await env.DB.prepare("DELETE FROM digiflazz_connections WHERE id=1").run();
-      return reply({ok:true,disconnected:true});
-    }
-    if (method==="POST" && path==="/api/scan") return reply(await scan(env));
-    if (method==="POST" && path==="/api/discover") return reply(await discover(env));
-    if (method==="GET" && path==="/api/discover") {
-      const rows=await env.DB.prepare("SELECT route FROM api_discovery ORDER BY route LIMIT 300").all();
-      return reply({ok:true,routes:rows.results});
-    }
-    if (method==="GET" && path==="/api/products") {
-      const page=bounded(url.searchParams.get("page"),1,100000,1);
-      const q="%"+str(url.searchParams.get("q")).slice(0,80)+"%";
-      const status=str(url.searchParams.get("status"));
-      const where="WHERE (p.sku LIKE ? OR p.name LIKE ? OR p.brand LIKE ?)"+(status==="issues"?" AND (p.seller_name='' OR p.seller_active=0 OR (p.max_price>0 AND p.price>p.max_price) OR (p.stock=0 AND p.unlimited_stock=0))":status==="locked"?" AND p.sku IN (SELECT buyer_sku_code FROM product_locks)":"");
-      const args=[q,q,q];
-      const [n,rows]=await Promise.all([
-        env.DB.prepare("SELECT count(*) total FROM products p "+where).bind(...args).first(),
-        env.DB.prepare("SELECT p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.last_seen,l.buyer_sku_code IS NOT NULL AS locked FROM products p LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku "+where+" ORDER BY p.last_seen DESC,p.name LIMIT 50 OFFSET ?").bind(...args,(page-1)*50).all()
-      ]);
-      return reply({ok:true,total:n.total,page,products:rows.results});
-    }
-    const opt=path.match(/^\/api\/products\/([^/]+)\/options$/);
-    if (method==="GET" && opt) {
-      const sku=decodeURIComponent(opt[1]);
-      const [p,o,preferences,rule,zone,cfg]=await Promise.all([
-        env.DB.prepare("SELECT p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.end_cut_off,l.buyer_sku_code IS NOT NULL AS locked FROM products p LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku WHERE p.sku=?").bind(sku).first(),
-        env.DB.prepare("SELECT sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description FROM seller_options WHERE sku=?").bind(sku).all(),
-        env.DB.prepare("SELECT seller_name,mode FROM seller_preferences").all(),
-        env.DB.prepare("SELECT * FROM seller_rules WHERE is_active=1 AND (scope_type='global' OR (scope_type='product' AND scope_value=?) OR (scope_type='brand' AND scope_value=(SELECT brand FROM products WHERE sku=?)) OR (scope_type='category' AND scope_value=(SELECT category FROM products WHERE sku=?)) OR (scope_type='type' AND scope_value=(SELECT product_type FROM products WHERE sku=?))) ORDER BY CASE scope_type WHEN 'product' THEN 0 WHEN 'type' THEN 1 WHEN 'brand' THEN 2 WHEN 'category' THEN 3 ELSE 4 END,id DESC LIMIT 1").bind(sku,sku,sku,sku).first(),
-        env.DB.prepare("SELECT z.patterns FROM zones z JOIN zone_assignments a ON a.zone_id=z.id WHERE a.sku=?").bind(sku).first(),
-        settings(env)
-      ]);
-      if(!p)return failure("Produk tidak ditemukan.",404);
-      return reply({ok:true,product:p,options:rank(p,o.results,preferences.results,rule,cfg,zone?{patterns:JSON.parse(zone.patterns)}:null),connectorReady:false});
-    }
-    const lock=path.match(/^\/api\/products\/([^/]+)\/lock$/);
-    if(method==="POST"&&lock) {
-      const sku=decodeURIComponent(lock[1]),body=await getJson(req);
-      if(bool(body.locked)) await env.DB.prepare("INSERT INTO product_locks(buyer_sku_code,reason) VALUES(?,?) ON CONFLICT(buyer_sku_code) DO UPDATE SET reason=excluded.reason").bind(sku,str(body.reason)).run();
-      else await env.DB.prepare("DELETE FROM product_locks WHERE buyer_sku_code=?").bind(sku).run();
-      return reply({ok:true,locked:bool(body.locked)});
-    }
-    if(method==="POST"&&/^\/api\/products\/[^/]+\/switch$/.test(path)) return failure("Endpoint perubahan seller Digiflazz belum terverifikasi. Tidak ada produk yang diubah.",503);
-    if(method==="GET"&&path==="/api/sellers") {
-      const rows=await env.DB.prepare("SELECT s.seller_id,s.name,s.rating,s.review_count,s.product_count,s.invoice,p.mode FROM sellers s LEFT JOIN seller_preferences p ON p.seller_name=s.name ORDER BY s.rating DESC,s.name LIMIT 1000").all();
-      return reply({ok:true,sellers:rows.results});
-    }
-    const pref=path.match(/^\/api\/sellers\/([^/]+)\/preference$/);
-    if(method==="POST"&&pref) {
-      const body=await getJson(req), name=decodeURIComponent(pref[1]);
-      if(!["preferred","blocked","none"].includes(body.mode))throw Error("Pilihan tidak valid.");
-      await env.DB.prepare("DELETE FROM seller_preferences WHERE seller_name=?").bind(name).run();
-      if(body.mode!=="none") await env.DB.prepare("INSERT INTO seller_preferences(seller_name,mode) VALUES(?,?)").bind(name,body.mode).run();
-      return reply({ok:true,mode:body.mode});
-    }
-    if(method==="GET"&&path==="/api/rules") {
-      const rows=await env.DB.prepare("SELECT * FROM seller_rules ORDER BY id DESC").all();
-      return reply({ok:true,rules:rows.results});
-    }
-    if(method==="POST"&&path==="/api/rules") {
-      const b=await getJson(req);
-      if(!["global","category","brand","type","product"].includes(b.scope_type))throw Error("Cakupan tidak valid.");
-      if(b.scope_type!=="global"&&!str(b.scope_value))throw Error("Target aturan wajib diisi.");
-      const r=await env.DB.prepare("INSERT INTO seller_rules(scope_type,scope_value,min_rating,max_price,require_stock,avoid_cutoff) VALUES(?,?,?,?,?,?)").bind(b.scope_type,str(b.scope_value),b.min_rating==null?null:bounded(b.min_rating,0,5),b.max_price==null?null:bounded(b.max_price,0,1000000000),bool(b.require_stock)?1:0,bool(b.avoid_cutoff)?1:0).run();
-      return reply({ok:true,id:r.meta.last_row_id});
-    }
-    const rule=path.match(/^\/api\/rules\/(\d+)$/);
-    if(method==="DELETE"&&rule) {
-      await env.DB.prepare("DELETE FROM seller_rules WHERE id=?").bind(Number(rule[1])).run();
-      return reply({ok:true});
-    }
-    if(method==="GET"&&path==="/api/zones") {
-      const rows=await env.DB.prepare("SELECT z.*,count(a.sku) assignments FROM zones z LEFT JOIN zone_assignments a ON a.zone_id=z.id GROUP BY z.id ORDER BY z.name").all();
-      return reply({ok:true,zones:rows.results});
-    }
-    if(method==="POST"&&path==="/api/zones") {
-      const b=await getJson(req),patterns=str(b.patterns).split(",").map(x=>x.trim()).filter(Boolean);
-      if(!str(b.name)||!str(b.product_id)||!patterns.length)throw Error("Nama, product ID, dan pola zona wajib diisi.");
-      const r=await env.DB.prepare("INSERT INTO zones(name,product_id,patterns) VALUES(?,?,?)").bind(str(b.name),str(b.product_id),JSON.stringify(patterns)).run();
-      return reply({ok:true,id:r.meta.last_row_id});
-    }
-    const zone=path.match(/^\/api\/zones\/(\d+)$/);
-    if(method==="DELETE"&&zone) {
-      await env.DB.prepare("DELETE FROM zones WHERE id=?").bind(Number(zone[1])).run();
-      return reply({ok:true});
-    }
-    if(method==="POST"&&path==="/api/zones/assign") {
-      const b=await getJson(req);
-      if(!str(b.sku))throw Error("SKU wajib diisi.");
-      if(b.zone_id) await env.DB.prepare("INSERT INTO zone_assignments(sku,zone_id) VALUES(?,?) ON CONFLICT(sku) DO UPDATE SET zone_id=excluded.zone_id").bind(str(b.sku),Number(b.zone_id)).run();
-      else await env.DB.prepare("DELETE FROM zone_assignments WHERE sku=?").bind(str(b.sku)).run();
-      return reply({ok:true});
-    }
-    if(method==="GET"&&path==="/api/events") {
-      const rows=await env.DB.prepare("SELECT id,level,kind,sku,message,created_at FROM events ORDER BY id DESC LIMIT 200").all();
-      return reply({ok:true,events:rows.results});
-    }
-    if(method==="GET"&&path==="/api/history") {
-      const [prices,switches,runs]=await Promise.all([
-        env.DB.prepare("SELECT buyer_sku_code,seller_name,price,captured_at FROM price_history ORDER BY id DESC LIMIT 100").all(),
-        env.DB.prepare("SELECT buyer_sku_code,from_seller,to_seller,reason,status,created_at FROM switch_history ORDER BY id DESC LIMIT 100").all(),
-        env.DB.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 50").all()
-      ]);
-      return reply({ok:true,prices:prices.results,switches:switches.results,runs:runs.results});
-    }
-    if(method==="GET"&&path==="/api/settings")return reply({ok:true,settings:await settings(env)});
-    if(method==="POST"&&path==="/api/settings") {
-      const current=await settings(env),next=validateSettings(await getJson(req),current);
-      const operations=Object.entries(next).map(([k,v])=>env.DB.prepare("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP").bind(k,JSON.stringify(v)));
-      await env.DB.batch(operations);
-      return reply({ok:true,settings:next});
-    }
-    if(method==="GET"&&path==="/api/random-code") {
-      const bytes=crypto.getRandomValues(new Uint8Array(5));
-      return reply({ok:true,code:"L"+[...bytes].map(n=>"0123456789ABCDEFGHJKMNPQRSTVWXYZ"[n%32]).join("")});
-    }
-    return failure("Halaman API tidak ditemukan.",404);
-  } catch(error) {
-    return failure(error, /sesi|Digiflazz mengembalikan|format katalog|tidak mengembalikan/i.test(error.message)?502:400);
-  }
-}
-export { rank, normalizeProduct, validateSettings };
+
+const PAGE = `<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Digiflazz Tools</title><style>
+:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#070b14;color:#ecf2ff;--panel:#0d1423;--line:#25314a;--muted:#91a1bf;--blue:#3b82f6;--green:#34d399;--red:#fb7185;--amber:#fbbf24}*{box-sizing:border-box}body{margin:0;background:#070b14;color:#ecf2ff}.app{display:grid;grid-template-columns:220px 1fr;min-height:100vh}.side{border-right:1px solid var(--line);padding:18px;position:sticky;top:0;height:100vh;background:#09101d}.brand{font-weight:900;font-size:19px;margin-bottom:18px}.nav{display:grid;gap:5px}.nav button{width:100%;text-align:left;background:transparent;border:0;color:#aebbd4;padding:10px 12px;border-radius:9px;font-weight:700}.nav button.active,.nav button:hover{background:#142039;color:white}.main{padding:24px;min-width:0}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px}.title{font-size:24px;font-weight:900}.pill{padding:7px 10px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:12px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}.stat b{display:block;font-size:24px;margin-top:4px}.muted{color:var(--muted)}button,.btn{border:0;border-radius:9px;padding:9px 12px;background:var(--blue);color:white;font-weight:800;cursor:pointer}.secondary{background:#17233a;border:1px solid #33415e}.danger{background:#521b2a}.ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}input,select,textarea{background:#080e19;border:1px solid #33415e;color:#eaf2ff;border-radius:9px;padding:9px 10px;outline:none}input:focus,select:focus,textarea:focus{border-color:#5b9bff}.tablewrap{overflow:auto;border:1px solid var(--line);border-radius:12px}table{border-collapse:collapse;width:100%;min-width:850px;background:var(--panel)}th,td{text-align:left;padding:10px 11px;border-bottom:1px solid #1f2a3e;font-size:13px}th{color:#9fb0ce;background:#0a1120;position:sticky;top:0}.badge{display:inline-block;padding:3px 7px;border-radius:999px;font-size:11px;font-weight:800;background:#17233a}.badge.ok{background:#103528}.badge.bad{background:#451b28}.view{display:none}.view.active{display:block}.modal{display:none;position:fixed;inset:0;background:#050812dd;z-index:10;align-items:center;justify-content:center;padding:18px}.modal.open{display:flex}.modalbox{width:min(850px,100%);max-height:88vh;overflow:auto;background:#0d1423;border:1px solid #32415f;border-radius:16px;padding:18px}.modalhead{display:flex;justify-content:space-between;gap:12px;align-items:center}.sellerrow{display:grid;grid-template-columns:1.4fr .7fr .5fr .5fr auto;gap:8px;align-items:center;padding:10px;border-bottom:1px solid #1f2a3e}.settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.setting{padding:12px;border:1px solid var(--line);border-radius:10px}.setting label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}.setting input,.setting select{width:100%}.toast{position:fixed;right:18px;bottom:18px;background:#101a2c;border:1px solid #33415e;padding:12px 14px;border-radius:10px;display:none;z-index:20;max-width:360px}.toast.show{display:block}@media(max-width:900px){.app{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:12px}.brand{margin-bottom:10px}.nav{display:flex;overflow:auto}.nav button{white-space:nowrap;width:auto}.main{padding:14px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.settings{grid-template-columns:1fr}.sellerrow{grid-template-columns:1fr 1fr}.sellerrow>:nth-child(3),.sellerrow>:nth-child(4){display:none}}@media(max-width:520px){.grid{grid-template-columns:1fr 1fr}.stat b{font-size:20px}.top{align-items:flex-start;flex-direction:column}}
+</style></head><body><div class="app"><aside class="side"><div class="brand">⚡ Digiflazz Tools</div><div class="nav"><button data-v="overview" class="active">Dashboard</button><button data-v="products">Produk</button><button data-v="sellers">Seller</button><button data-v="changes">Perubahan</button><button data-v="history">Switch Log</button><button data-v="settings">Pengaturan</button><button data-v="connection">Koneksi</button></div></aside><main class="main"><div class="top"><div><div class="title" id="pageTitle">Dashboard</div><div class="muted" id="subtitle">Monitor & seller manager Digiflazz</div></div><div class="toolbar"><span class="pill" id="connPill">Memeriksa koneksi…</span><button id="syncBtn">Sync Sekarang</button></div></div>
+<section id="overview" class="view active"><div class="grid"><div class="card stat"><span class="muted">Produk</span><b id="stProducts">0</b></div><div class="card stat"><span class="muted">Bermasalah</span><b id="stBad">0</b></div><div class="card stat"><span class="muted">Locked</span><b id="stLocked">0</b></div><div class="card stat"><span class="muted">Auto Switch</span><b id="stAuto">OFF</b></div></div><div class="card" style="margin-top:12px"><b>Monitor terakhir</b><p class="muted" id="lastRun">Belum ada data. Tekan Sync Sekarang.</p></div></section>
+<section id="products" class="view"><div class="toolbar"><input id="pq" placeholder="Cari produk / SKU / seller"><select id="pcat"><option value="">Semua kategori</option></select><select id="pstatus"><option value="all">Semua status</option><option value="bad">Bermasalah</option><option value="ok">Sehat</option></select><button class="secondary" id="prefresh">Refresh</button></div><div class="tablewrap"><table><thead><tr><th>Produk</th><th>SKU</th><th>Seller</th><th>Harga</th><th>Max</th><th>Status</th><th>Aksi</th></tr></thead><tbody id="productRows"></tbody></table></div></section>
+<section id="sellers" class="view"><div class="toolbar"><input id="sq" placeholder="Cari seller"><button class="secondary" id="srefresh">Refresh Seller</button></div><div class="tablewrap"><table><thead><tr><th>Seller</th><th>Rating</th><th>Produk</th><th>Faktur</th><th>Last Seen</th><th>Rule</th></tr></thead><tbody id="sellerRows"></tbody></table></div></section>
+<section id="changes" class="view"><div class="toolbar"><select id="chours"><option value="6">6 jam</option><option value="24" selected>24 jam</option><option value="48">48 jam</option><option value="168">7 hari</option></select><button class="secondary" id="crefresh">Refresh</button></div><div class="tablewrap"><table><thead><tr><th>Waktu</th><th>Severity</th><th>Tipe</th><th>Produk</th><th>Perubahan</th></tr></thead><tbody id="changeRows"></tbody></table></div></section>
+<section id="history" class="view"><div class="tablewrap"><table><thead><tr><th>Waktu</th><th>SKU</th><th>Dari</th><th>Ke</th><th>Alasan</th><th>Harga</th><th>Status</th></tr></thead><tbody id="historyRows"></tbody></table></div></section>
+<section id="settings" class="view"><div class="card"><div class="settings"><div class="setting"><label>Monitor otomatis</label><select id="cfgMonitor"><option value="1">ON</option><option value="0">OFF</option></select></div><div class="setting"><label>Auto-switch</label><select id="cfgAuto"><option value="0">OFF</option><option value="1">ON</option></select></div><div class="setting"><label>Proactive seller</label><select id="cfgPro"><option value="0">OFF</option><option value="1">ON</option></select></div><div class="setting"><label>Minimum rating seller</label><input id="cfgRating" type="number" min="0" max="5" step="0.1"></div><div class="setting"><label>Maks kenaikan harga (%)</label><input id="cfgMaxInc" type="number" min="0" max="100"></div><div class="setting"><label>Review bonus maksimum</label><input id="cfgReview" type="number" min="0" max="50"></div><div class="setting"><label>Preserve max price</label><select id="cfgPreserve"><option value="1">ON</option><option value="0">OFF</option></select></div><div class="setting"><label>Minimum saving proactive (%)</label><input id="cfgSaving" type="number" min="0" max="100"></div></div><div class="toolbar"><button id="saveSettings">Simpan Pengaturan</button></div><p class="muted">Auto-switch hanya bekerja jika Monitor dan Auto-switch sama-sama ON. Produk yang di-lock tidak akan disentuh auto-switch.</p></div></section>
+<section id="connection" class="view"><div class="card"><div id="connectionStatus" class="pill">-</div><p class="muted">Gunakan lagi hanya jika session expired.</p><textarea id="curl" style="width:100%;min-height:180px" placeholder="Paste Copy as cURL dari Digiflazz"></textarea><div class="toolbar"><button id="saveConn">Simpan Session</button><button class="secondary" id="testConn">Tes Koneksi</button><button class="danger" id="dropConn">Putuskan</button></div></div></section>
+</main></div><div class="modal" id="sellerModal"><div class="modalbox"><div class="modalhead"><div><b id="modalTitle">Seller</b><div class="muted" id="modalSub"></div></div><button class="secondary" id="closeModal">Tutup</button></div><div id="sellerOptions" style="margin-top:12px"></div></div></div><div class="toast" id="toast"></div><script>
+const q=x=>document.getElementById(x),fmt=n=>new Intl.NumberFormat('id-ID').format(Number(n||0));let STATE=null,PRODUCTS=[];function toast(m){q('toast').textContent=m;q('toast').classList.add('show');setTimeout(()=>q('toast').classList.remove('show'),3500)}async function api(path,opt={}){const r=await fetch(path,{...opt,headers:{'content-type':'application/json',...(opt.headers||{})}}),b=await r.json().catch(()=>({}));if(!r.ok)throw Error(b.error||'Request gagal');return b}function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}function view(v){document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===v));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.v===v));q('pageTitle').textContent={overview:'Dashboard',products:'Produk',sellers:'Seller',changes:'Perubahan',history:'Switch Log',settings:'Pengaturan',connection:'Koneksi'}[v]||v;if(v==='products')loadProducts();if(v==='sellers')loadSellers();if(v==='changes')loadChanges();if(v==='history')loadHistory()}document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>view(b.dataset.v));
+async function loadState(){try{STATE=await api('/api/state');q('connPill').textContent=STATE.connection.connected?'Digiflazz Connected':'Belum terhubung';q('connPill').className='pill '+(STATE.connection.connected?'ok':'bad');q('stProducts').textContent=fmt(STATE.counts.products);q('stBad').textContent=fmt(STATE.counts.unhealthy);q('stLocked').textContent=fmt(STATE.counts.locked);q('stAuto').textContent=STATE.settings.auto_switch==='1'?'ON':'OFF';q('stAuto').className=STATE.settings.auto_switch==='1'?'ok':'';q('lastRun').textContent=STATE.lastRun?('Status '+STATE.lastRun.status+' · '+STATE.lastRun.products_seen+' produk · '+STATE.lastRun.unhealthy_count+' bermasalah · '+STATE.lastRun.switches_count+' switch'):'Belum ada data. Tekan Sync Sekarang.';fillSettings();q('connectionStatus').textContent=STATE.connection.connected?'Session tersimpan · HTTP '+(STATE.connection.lastTestStatus||'-'):'Belum terhubung'}catch(e){toast(e.message)}}function fillSettings(){if(!STATE)return;const s=STATE.settings;q('cfgMonitor').value=s.monitor_enabled;q('cfgAuto').value=s.auto_switch;q('cfgPro').value=s.proactive_enabled;q('cfgRating').value=s.min_rating;q('cfgMaxInc').value=s.max_price_increase_percent;q('cfgReview').value=s.review_bonus_max;q('cfgPreserve').value=s.preserve_max_price;q('cfgSaving').value=s.proactive_min_savings_percent}
+async function loadCats(){const d=await api('/api/categories');q('pcat').innerHTML='<option value="">Semua kategori</option>'+d.data.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>').join('')}
+async function loadProducts(){const p=new URLSearchParams({q:q('pq').value,category:q('pcat').value,status:q('pstatus').value});const d=await api('/api/products?'+p);PRODUCTS=d.data;q('productRows').innerHTML=d.data.map(x=>{const bad=Number(x.status_sellerSku)!==1||Number(x.status)!==1||!x.seller_sku_id||Number(x.price)>Number(x.max_price);return '<tr><td><b>'+esc(x.product)+'</b><div class="muted">'+esc(x.category_name)+'</div></td><td>'+esc(x.code||'-')+'</td><td>'+esc(x.seller||'-')+'</td><td>Rp'+fmt(x.price)+'</td><td>Rp'+fmt(x.max_price)+'</td><td><span class="badge '+(bad?'bad':'ok')+'">'+(bad?'Bermasalah':'Sehat')+'</span>'+(Number(x.locked)?' <span class="badge">LOCK</span>':'')+'</td><td><button onclick="openSellers(\''+encodeURIComponent(x.id)+'\')">Seller</button> <button class="secondary" onclick="toggleLock(\''+encodeURIComponent(x.id)+'\','+(Number(x.locked)?'false':'true')+')">'+(Number(x.locked)?'Unlock':'Lock')+'</button></td></tr>'}).join('')||'<tr><td colspan="7" class="muted">Belum ada produk. Tekan Sync Sekarang.</td></tr>'}
+async function openSellers(id){q('sellerModal').classList.add('open');q('sellerOptions').innerHTML='<p class="muted">Memuat seller…</p>';try{const d=await api('/api/products/'+id+'/sellers');q('modalTitle').textContent=d.product.product;q('modalSub').textContent='Saat ini: '+(d.product.seller||'-')+' · Rp'+fmt(d.product.price);q('sellerOptions').innerHTML=d.data.map((x,i)=>'<div class="sellerrow"><div><b>#'+(i+1)+' '+esc(x.seller)+'</b><div class="muted">'+esc(x.connectionType||'-')+' · '+esc(x.seller_details?.sla||'-')+(x.preferred?' · Preferred':'')+'</div></div><div>Rp'+fmt(x.price)+'</div><div>★ '+Number(x.reviewAvg||0).toFixed(1)+'</div><div>Score '+Number(x.score||0).toFixed(1)+'</div><button onclick="useSeller(\''+id+'\',\''+encodeURIComponent(x.id)+'\')">Gunakan</button></div>').join('')||'<p class="muted">Tidak ada seller yang lolos filter.</p>'}catch(e){q('sellerOptions').innerHTML='<p class="bad">'+esc(e.message)+'</p>'}}async function useSeller(pid,sid){if(!confirm('Ganti seller produk ini sekarang?'))return;try{const d=await api('/api/products/'+pid+'/switch',{method:'POST',body:JSON.stringify({sellerId:decodeURIComponent(sid)})});toast(d.message||'Seller berhasil diganti');q('sellerModal').classList.remove('open');await loadProducts();await loadState()}catch(e){toast(e.message)}}async function toggleLock(id,locked){try{await api('/api/products/'+id+'/lock',{method:'POST',body:JSON.stringify({locked})});toast(locked?'Produk di-lock':'Lock dibuka');loadProducts();loadState()}catch(e){toast(e.message)}}
+async function loadSellers(){q('sellerRows').innerHTML='<tr><td colspan="6" class="muted">Memuat…</td></tr>';try{const d=await api('/api/sellers'),needle=q('sq').value.toLowerCase(),rows=d.data.filter(x=>!needle||String(x.company_name).toLowerCase().includes(needle));q('sellerRows').innerHTML=rows.map(x=>'<tr><td><b>'+esc(x.company_name)+'</b></td><td>★ '+Number(x.review_avg||0).toFixed(1)+'</td><td>'+fmt(x.product_qty)+'</td><td>'+(Number(x.faktur_pajak)?'Ya':'-')+'</td><td>'+esc(x.last_seen||'-')+'</td><td><button class="'+(Number(x.preferred)?'':'secondary')+'" onclick="sellerRule(\''+encodeURIComponent(x.company_name)+'\',\'preferred\')">Preferred</button> <button class="'+(Number(x.blocked)?'danger':'secondary')+'" onclick="sellerRule(\''+encodeURIComponent(x.company_name)+'\',\'blocked\')">Blocked</button> <button class="secondary" onclick="sellerRule(\''+encodeURIComponent(x.company_name)+'\',\'off\')">Reset</button></td></tr>').join('')||'<tr><td colspan="6">Tidak ada data.</td></tr>'}catch(e){toast(e.message)}}async function sellerRule(name,mode){try{await api('/api/seller-preference',{method:'POST',body:JSON.stringify({seller:decodeURIComponent(name),mode})});loadSellers()}catch(e){toast(e.message)}}
+async function loadChanges(){const d=await api('/api/changes?hours='+q('chours').value);q('changeRows').innerHTML=d.data.map(x=>'<tr><td>'+esc(x.created_at)+'</td><td><span class="badge '+(x.severity==='critical'?'bad':x.severity==='warning'?'warn':'')+'">'+esc(x.severity)+'</span></td><td>'+esc(x.change_type)+'</td><td>'+esc(x.product_name||x.product_code||'-')+'</td><td>'+esc(x.old_value||'-')+' → '+esc(x.new_value||'-')+'</td></tr>').join('')||'<tr><td colspan="5" class="muted">Belum ada perubahan.</td></tr>'}
+async function loadHistory(){const d=await api('/api/switch-history');q('historyRows').innerHTML=d.data.map(x=>'<tr><td>'+esc(x.created_at)+'</td><td>'+esc(x.buyer_sku_code)+'</td><td>'+esc(x.from_seller||'-')+'</td><td>'+esc(x.to_seller)+'</td><td>'+esc(x.reason)+'</td><td>Rp'+fmt(x.previous_price)+' → Rp'+fmt(x.new_price)+'</td><td>'+esc(x.status)+'</td></tr>').join('')||'<tr><td colspan="7" class="muted">Belum ada switch.</td></tr>'}
+q('syncBtn').onclick=async()=>{q('syncBtn').disabled=true;q('syncBtn').textContent='Sync…';try{const d=await api('/api/sync',{method:'POST',body:'{}'});toast('Sync selesai: '+d.products+' produk');await loadCats();await loadState();if(q('products').classList.contains('active'))await loadProducts()}catch(e){toast(e.message)}finally{q('syncBtn').disabled=false;q('syncBtn').textContent='Sync Sekarang'}};q('prefresh').onclick=loadProducts;q('pq').oninput=()=>{clearTimeout(window.pqt);window.pqt=setTimeout(loadProducts,250)};q('pcat').onchange=loadProducts;q('pstatus').onchange=loadProducts;q('srefresh').onclick=loadSellers;q('sq').oninput=()=>loadSellers();q('crefresh').onclick=loadChanges;q('chours').onchange=loadChanges;q('closeModal').onclick=()=>q('sellerModal').classList.remove('open');q('sellerModal').onclick=e=>{if(e.target===q('sellerModal'))q('sellerModal').classList.remove('open')};
+q('saveSettings').onclick=async()=>{const body={monitor_enabled:q('cfgMonitor').value,auto_switch:q('cfgAuto').value,proactive_enabled:q('cfgPro').value,min_rating:q('cfgRating').value,max_price_increase_percent:q('cfgMaxInc').value,review_bonus_max:q('cfgReview').value,preserve_max_price:q('cfgPreserve').value,proactive_min_savings_percent:q('cfgSaving').value};try{await api('/api/settings',{method:'POST',body:JSON.stringify(body)});toast('Pengaturan tersimpan');loadState()}catch(e){toast(e.message)}};
+q('saveConn').onclick=async()=>{try{await api('/api/connection',{method:'POST',body:JSON.stringify({curl:q('curl').value})});q('curl').value='';toast('Session tersimpan');loadState()}catch(e){toast(e.message)}};q('testConn').onclick=async()=>{try{const d=await api('/api/connection/test',{method:'POST',body:'{}'});toast(d.message+' HTTP '+d.httpStatus);loadState()}catch(e){toast(e.message)}};q('dropConn').onclick=async()=>{if(!confirm('Putuskan session Digiflazz?'))return;try{await api('/api/connection',{method:'DELETE'});toast('Session dihapus');loadState()}catch(e){toast(e.message)}};
+(async()=>{await loadState();await loadCats()})();
+</script></body></html>`;
+
 export default {
-  async fetch(req,env) {
-    const url=new URL(req.url);
-    if(url.pathname.startsWith("/api/")) return api(req,env,url);
-    if(!await authorize(req,env)) return failure("Akses pribadi diperlukan.",401);
-    if(url.pathname!=="/")return new Response(null,{status:404});
-    return new Response(HTML,{headers:{...secureHeaders,"content-type":"text/html; charset=utf-8","content-security-policy":"default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"}});
-  },
-  async scheduled(event,env) {
-    try {
-      const cfg=await settings(env);
-      const last=await env.DB.prepare("SELECT finished_at FROM scan_runs WHERE status='success' ORDER BY id DESC LIMIT 1").first();
-      const due=!last || Date.now()-Date.parse(last.finished_at.replace(" ","T")+"Z")>=cfg.scanIntervalMinutes*60000;
-      if(cfg.scanEnabled&&due) await scan(env,"cron");
-      const known=await env.DB.prepare("SELECT count(*) total FROM api_discovery").first();
-      const previous=await env.DB.prepare("SELECT value FROM app_settings WHERE key='discovery_last_attempt'").first();
-      if(known.total===0&&await conn(env)&&(!previous||Date.now()-Date.parse(previous.value)>86400000)) {
-        await env.DB.prepare("INSERT INTO app_settings(key,value) VALUES('discovery_last_attempt',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(new Date().toISOString()).run();
-        await discover(env);
-      }
-    } catch(error) { try { await log(env,"ERROR","cron",error.message); } catch {} }
-  }
+  async fetch(request,env){const url=new URL(request.url);if(url.pathname.startsWith('/api/'))return api(request,env,url);return new Response(PAGE,{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','content-security-policy':"default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",'referrer-policy':'no-referrer','x-content-type-options':'nosniff'}})},
+  async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{const cfg=await settings(env);if(cfg.monitor_enabled==='1')await runSync(env,{allowSwitch:true,source:'cron'})})())}
 };
