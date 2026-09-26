@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         Digi Tools — Auto Select Seller
 // @namespace    https://tools.lfamiliastore.my.id/
-// @version      1.2.0
+// @version      1.3.0
 // @description  Pilih seller langsung di halaman produk Digiflazz. Sesi tetap di browser.
 // @match        https://member.digiflazz.com/*
 // @run-at       document-end
-// @inject-into  auto
-// @grant        none
+// @inject-into  content
+// @grant        GM_info
+// @grant        GM_registerMenuCommand
 // @noframes
 // @downloadURL  https://raw.githubusercontent.com/muhammadaldy198/digiflazz-tools/main/extension/digi-select.user.js
 // @updateURL    https://raw.githubusercontent.com/muhammadaldy198/digiflazz-tools/main/extension/digi-select.user.js
@@ -185,11 +186,13 @@
   function panel() {
     if(document.getElementById("digi-tools-auto-seller"))return;
     const host=document.createElement("div");host.id="digi-tools-auto-seller";
-    host.style.cssText="position:fixed;right:12px;bottom:75px;z-index:2147483647";
-    const ui=host.attachShadow({mode:"closed"});
+    const viewportScale=Number(window.visualViewport?.scale)||1;
+    const uiScale=Math.max(1,Math.min(3,1/viewportScale));
+    host.style.cssText="all:initial!important;position:fixed!important;right:16px!important;top:90px!important;z-index:2147483647!important;display:block!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;transform-origin:top right!important;transform:scale("+uiScale+")!important";
+    const ui=host.attachShadow({mode:"open"});
     ui.innerHTML=`<style>
       *{box-sizing:border-box}button,input,select,textarea{font:inherit}button{cursor:pointer}
-      .bubble{border:0;border-radius:26px;background:#087b96;color:white;padding:11px 15px;box-shadow:0 4px 20px #0005;font:700 13px system-ui}
+      .bubble{display:block!important;min-width:132px;min-height:46px;border:0;border-radius:26px;background:#087b96;color:white;padding:12px 16px;box-shadow:0 4px 20px #0008;font:700 14px system-ui;visibility:visible!important;opacity:1!important}
       .box{display:none;width:min(310px,calc(100vw - 24px));max-height:min(78vh,670px);overflow:auto;border:1px solid #35667a;border-radius:13px;background:#102330;color:#eef6fa;padding:14px;box-shadow:0 8px 26px #0008;font:13px system-ui;margin-bottom:8px}
       .box.open{display:block}h3{margin:0 0 8px;font-size:16px}p{margin:5px 0 12px;color:#b9d3dc;line-height:1.4}
       label{display:block;margin:10px 0 4px}input:not([type=checkbox]),textarea,select{width:100%;background:#071925;border:1px solid #426579;border-radius:7px;color:white;padding:8px}
@@ -209,7 +212,7 @@
       <button id="make-code" type="button">Buat kode</button> <button id="copy-code" type="button" disabled>Salin</button> <strong id="code-result"></strong>
       <label for="preferred">Seller prioritas (pisah koma)</label><textarea id="preferred"></textarea>
       <label for="blocked">Seller diblokir (pisah koma)</label><textarea id="blocked"></textarea>
-      <div id="status" class="status" role="status">Auto Seller v1.2 aktif. Menunggu halaman Produk…</div>
+      <div id="status" class="status" role="status">Auto Seller v1.3 aktif. Menunggu halaman Produk…</div>
     </div><button class="bubble" id="toggle" aria-label="Buka pengaturan auto seller">⚡ Auto Seller</button>`;
     const get=id=>ui.getElementById(id);
     get("enabled").checked=settings.enabled;
@@ -240,7 +243,8 @@
       settings={enabled:get("enabled").checked,saveMode:get("mode").value,minRating:Math.min(5,Math.max(0,Number(get("rating").value)||0)),minReviews:Math.max(0,Number(get("reviews").value)||0),priceCap:Math.max(0,Number(get("cap").value)||0),autoFillMaxPrice:get("fill").checked,maxPriceOffset:Math.min(1000000000,Math.max(0,Math.trunc(Number(get("offset").value)||0))),autoServiceCode:get("code").checked,preferred:get("preferred").value,blocked:get("blocked").value};
       localStorage.setItem(KEY,JSON.stringify(settings));update("Pengaturan tersimpan di browser ini.");
     });
-    document.body.append(host);
+    (document.documentElement||document.body).append(host);
+    host.__openDigiTools=()=>get("box").classList.add("open");
   }
   let timer;
   function init() {
@@ -253,5 +257,12 @@
     setInterval(scanVue,1800);
   }
   if(testing) {module.exports={chooseSeller,reviewCount,patch,serviceCode,maxPriceForSeller};return}
+  try {
+    if(typeof GM_registerMenuCommand==="function") GM_registerMenuCommand("Buka Auto Seller",()=>{
+      panel();
+      document.getElementById("digi-tools-auto-seller")?.__openDigiTools?.();
+    });
+  } catch {}
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",init,{once:true});else init();
+  setTimeout(()=>{if(!document.getElementById("digi-tools-auto-seller"))init()},1200);
 })();
