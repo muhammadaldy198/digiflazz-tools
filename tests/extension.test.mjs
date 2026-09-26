@@ -62,3 +62,10 @@ test("hooks Digiflazz Vue choice after loading the selected product's sellers",a
   assert.equal(component.autoUpdateMaxPrice,false);
   assert.equal(component.currentEditted.max_price,9500);
 });
+
+test("Firefox Android userscript uses CSP-safe auto injection and visible panel",()=>{
+  assert.match(source,/\/\/ @inject-into\s+auto/);
+  assert.match(source,/\/\/ @run-at\s+document-end/);
+  assert.match(source,/Auto Seller v1\.2 aktif/);
+  assert.match(source,/wrappedJSObject/);
+});
