@@ -46,7 +46,7 @@ test("one global rupiah addition is applied to any seller price",()=>{
   assert.equal(maxPriceForSeller(15000,-1),null);
 });
 
-test("hooks Digiflazz Vue choice after loading the selected product's sellers",async()=>{
+test("observes Digiflazz seller dialog without replacing its native button handler",()=>{
   const selected=candidate("better","Better",9500);
   let called=null,saved=false;
   const component={sellers:[],fetchingSellers:false,dialogSeller:false,currentEditted:null,
@@ -54,9 +54,12 @@ test("hooks Digiflazz Vue choice after loading the selected product's sellers",a
     selectSeller(choice){called=choice;this.currentEditted.seller_sku_id=choice.id;this.dialogSeller=false},
     editProduct(){saved=true}
   };
+  const nativeFetch=component.fetchSellers;
+  const row={...product};
+  component.fetchSellers(row);
+  assert.equal(component.fetchSellers,nativeFetch);
   assert.equal(patch(component),undefined);
-  component.fetchSellers({...product});
-  await new Promise(resolve=>setTimeout(resolve,180));
+  assert.equal(component.fetchSellers,nativeFetch);
   assert.equal(called?.id,"better");
   assert.equal(saved,false);
   assert.equal(component.autoUpdateMaxPrice,false);
@@ -66,7 +69,7 @@ test("hooks Digiflazz Vue choice after loading the selected product's sellers",a
 test("Firefox Android userscript uses forced content-context injection and visible panel",()=>{
   assert.match(source,/\/\/ @inject-into\s+content/);
   assert.match(source,/\/\/ @run-at\s+document-end/);
-  assert.match(source,/Auto Seller v1\.4 aktif/);
+  assert.match(source,/Auto Seller v1\.5 aktif/);
   assert.match(source,/wrappedJSObject/);
 });
 
@@ -76,4 +79,11 @@ test("batch SKU UI replaces one-by-one generator",()=>{
   assert.match(source,/Isi semua SKU di halaman/);
   assert.doesNotMatch(source,/id="code-game"/);
   assert.doesNotMatch(source,/id="code-product"/);
+});
+
+
+test("never monkeypatches fetchSellers",()=>{
+  assert.doesNotMatch(source,/vm\.fetchSellers\s*=/);
+  assert.doesNotMatch(source,/original\.apply/);
+  assert.match(source,/never replace Digiflazz's fetchSellers\/click handler/);
 });
