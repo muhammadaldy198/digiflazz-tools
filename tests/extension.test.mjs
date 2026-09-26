@@ -64,8 +64,8 @@ test("hooks Digiflazz Vue choice after loading the selected product's sellers",a
 });
 
 test("Firefox Android userscript uses forced content-context injection and visible panel",()=>{
-  assert.match(source,/\/\/ @inject-into\s+auto/);
+  assert.match(source,/\/\/ @inject-into\s+content/);
   assert.match(source,/\/\/ @run-at\s+document-end/);
-  assert.match(source,/Auto Seller v1\\.3 aktif/);
+  assert.match(source,/Auto Seller v1\.3 aktif/);
   assert.match(source,/wrappedJSObject/);
 });
