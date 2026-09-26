@@ -1,0 +1,175 @@
+// ==UserScript==
+// @name         Digi Tools — Auto Select Seller
+// @namespace    https://tools.lfamiliastore.my.id/
+// @version      1.0.0
+// @description  Pilih seller langsung di halaman produk Digiflazz. Sesi tetap di browser.
+// @match        https://member.digiflazz.com/*
+// @run-at       document-start
+// @inject-into  page
+// @grant        none
+// ==/UserScript==
+
+(() => {
+  "use strict";
+  const testing=typeof module!=="undefined" && !!module.exports;
+  const KEY = "digiTools.autoSeller.v1";
+  const DEFAULTS = {enabled:true,saveMode:"manual",minRating:4,minReviews:0,priceCap:0,autoFillMaxPrice:true,autoRandomCode:true,preferred:"",blocked:""};
+  const str = value => String(value ?? "").trim();
+  const names = value => new Set(str(value).split(/[\n,]/).map(x=>x.trim().toLowerCase()).filter(Boolean));
+  function reviewCount(value) {
+    const raw=str(value);
+    if (raw.startsWith("<")) return 0;
+    return Number(raw.match(/^\d+/)?.[0] || 0);
+  }
+  function chooseSeller(choices, product, options) {
+    const cfg={...DEFAULTS,...options}, blocked=names(cfg.blocked), preferred=names(cfg.preferred);
+    const cap=Math.min(...[product?.max_price,cfg.priceCap].map(Number).filter(x=>x>0),Infinity);
+    const valid=(Array.isArray(choices)?choices:[]).filter(x=>{
+      const price=Number(x.price),rating=x.reviewAvg==null?null:Number(x.reviewAvg);
+      return x.id!=null && str(x.id)!==str(product?.seller_sku_id) &&
+        Number(x.status_sellerSku)===1 && Number.isFinite(price) && price>0 && price<=cap &&
+        !blocked.has(str(x.seller).toLowerCase()) &&
+        (Number(cfg.minRating)<=0 || rating!=null && Number.isFinite(rating) && rating>=Number(cfg.minRating)) &&
+        reviewCount(x.rating_qty)>=Number(cfg.minReviews||0) &&
+        (Number(x.stock)>0 || Number(x.unlimited_stock)===1);
+    });
+    const low=Math.min(...valid.map(x=>Number(x.price)));
+    const score=x=>{
+      const connection=/ip/i.test(str(x.connectionType))?100:/h2h/i.test(str(x.connectionType))?70:50;
+      const sla=str(x.seller_details?.sla),speed=/h\+?0/i.test(sla)?100:/h\+?1/i.test(sla)?60:30;
+      return 40*low/Number(x.price)+.3*connection+.2*speed+10+Number(x.reviewAvg||0)*3+(preferred.has(str(x.seller).toLowerCase())?20:0);
+    };
+    return valid.sort((a,b)=>score(b)-score(a)||Number(a.price)-Number(b.price))[0] || null;
+  }
+
+  if (!testing && location.hostname !== "member.digiflazz.com") return;
+  function read() {
+    try {return {...DEFAULTS,...JSON.parse(localStorage.getItem(KEY)||"{}")}} catch {return {...DEFAULTS}}
+  }
+  let settings=testing?{...DEFAULTS}:read(),status=()=>{},lastProduct=null,lastSeller=null,lastActionTime=0;
+  function update(message) {status(message)}
+  function handle(vm,product) {
+    const cfg=settings;
+    if(!cfg.enabled || !product || !Array.isArray(vm.sellers))return;
+    const candidate=chooseSeller(vm.sellers,product,cfg);
+    if(!candidate){update("Tidak ada seller yang lolos harga, rating, dan stok.");return}
+    if(lastProduct===str(product.id) && lastSeller===str(candidate.id) && Date.now()-lastActionTime<3000)return;
+    lastProduct=str(product.id);lastSeller=str(candidate.id);lastActionTime=Date.now();
+    try {
+      // Use Digiflazz's own Vue action, which fills all linked seller fields.
+      vm.autoUpdateMaxPrice=!!cfg.autoFillMaxPrice;
+      vm.selectSeller(candidate);
+      update("Dipilih: "+str(candidate.seller)+" · Rp"+Number(candidate.price).toLocaleString("id-ID")+" · rating "+str(candidate.reviewAvg??"—")+(cfg.saveMode==="auto"?" · menyimpan…":" · tekan Simpan di Digiflazz"));
+      if(cfg.saveMode==="auto") {
+        if(typeof vm.editProduct!=="function") {update("Seller terpilih. Tombol simpan otomatis tidak ditemukan; tekan Simpan di Digiflazz.");return}
+        setTimeout(()=>{
+          if(vm.currentEditted!==product || str(product.seller_sku_id)!==str(candidate.id))return;
+          try {vm.editProduct(product)} catch {update("Seller terpilih. Penyimpanan otomatis gagal; tekan Simpan di Digiflazz.")}
+        },120);
+      }
+    } catch {update("Pemilihan otomatis gagal; pilih seller secara manual.")}
+  }
+  function patch(vm) {
+    if(!vm || vm.__digiToolsPatched || typeof vm.fetchSellers!=="function" || typeof vm.selectSeller!=="function" || !Array.isArray(vm.sellers))return;
+    vm.__digiToolsPatched=true;
+    const original=vm.fetchSellers;
+    vm.fetchSellers=function(product) {
+      const result=original.apply(this,arguments);
+      if(!settings.enabled)return result;
+      update("Memeriksa seller untuk "+str(product?.code||product?.product||"produk")+"…");
+      let attempts=0;
+      const wait=()=>{
+        if(!settings.enabled || vm._isDestroyed)return;
+        if(vm.currentEditted===product && vm.dialogSeller && !vm.fetchingSellers && Array.isArray(vm.sellers)) {
+          handle(vm,product);return;
+        }
+        if(++attempts<100)setTimeout(wait,100);
+        else update("Seller belum tersedia. Pilih manual jika Digiflazz berubah.");
+      };
+      setTimeout(wait,100);
+      return result;
+    };
+    update("Siap. Buka Produk lalu pilih seller pada salah satu produk.");
+  }
+  function scanVue() {
+    const roots=[];
+    for(const selector of ["#app","#__nuxt","body"]){const root=document.querySelector(selector)?.__vue__;if(root)roots.push(root)}
+    if(!roots.length)for(const el of document.querySelectorAll("[id],.el-dialog")){if(el.__vue__)roots.push(el.__vue__);if(roots.length>8)break}
+    const seen=new Set();
+    function walk(vm) {if(!vm||seen.has(vm))return;seen.add(vm);patch(vm);for(const child of vm.$children||[])walk(child)}
+    for(const vm of roots)walk(vm);
+  }
+  function randomCode() {
+    const bytes=crypto.getRandomValues(new Uint8Array(8));
+    return "L"+[...bytes].map(x=>"0123456789ABCDEFGHJKMNPQRSTVWXYZ"[x%32]).join("");
+  }
+  const populated=new WeakSet();
+  function fillNewCode() {
+    if(!settings.autoRandomCode)return;
+    for(const dialog of document.querySelectorAll(".el-dialog,.modal,.modal-dialog")) {
+      if(populated.has(dialog) || !dialog.getClientRects().length || !/tambah|buat|add/i.test(str(dialog.querySelector(".el-dialog__title,.modal-title")?.textContent)))continue;
+      const label=[...dialog.querySelectorAll("label")].find(x=>/kode (produk|layanan)|sku buyer/i.test(str(x.textContent)));
+      const field=label?.closest(".el-form-item,.form-group")?.querySelector("input") || dialog.querySelector('input[name="buyer_sku_code"],input[placeholder*="Kode Produk"]');
+      if(!field || field.value)continue;
+      const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")?.set;
+      if(!setter)continue;
+      setter.call(field,randomCode());
+      field.dispatchEvent(new Event("input",{bubbles:true}));
+      field.dispatchEvent(new Event("change",{bubbles:true}));
+      populated.add(dialog);
+      update("Kode layanan acak diisi pada form Tambah Produk.");
+    }
+  }
+  function panel() {
+    if(document.getElementById("digi-tools-auto-seller"))return;
+    const host=document.createElement("div");host.id="digi-tools-auto-seller";
+    host.style.cssText="position:fixed;right:12px;bottom:75px;z-index:2147483647";
+    const ui=host.attachShadow({mode:"closed"});
+    ui.innerHTML=`<style>
+      *{box-sizing:border-box}button,input,select,textarea{font:inherit}button{cursor:pointer}
+      .bubble{border:0;border-radius:26px;background:#087b96;color:white;padding:11px 15px;box-shadow:0 4px 20px #0005;font:700 13px system-ui}
+      .box{display:none;width:min(310px,calc(100vw - 24px));max-height:min(78vh,670px);overflow:auto;border:1px solid #35667a;border-radius:13px;background:#102330;color:#eef6fa;padding:14px;box-shadow:0 8px 26px #0008;font:13px system-ui;margin-bottom:8px}
+      .box.open{display:block}h3{margin:0 0 8px;font-size:16px}p{margin:5px 0 12px;color:#b9d3dc;line-height:1.4}
+      label{display:block;margin:10px 0 4px}input:not([type=checkbox]),textarea,select{width:100%;background:#071925;border:1px solid #426579;border-radius:7px;color:white;padding:8px}
+      input[type=checkbox]{margin-right:6px} .row{display:flex;align-items:center;gap:8px}.row>label{flex:1}
+      textarea{height:43px;resize:vertical} .status{padding:8px;border-radius:7px;background:#234254;color:#d6eff5;margin-top:10px}
+    </style><div class="box" id="box"><h3>Auto Seller Digiflazz</h3>
+      <p>Otomatis memilih seller setelah kamu membuka pilihan seller suatu produk.</p>
+      <label><input id="enabled" type="checkbox"> Aktifkan pemilihan</label>
+      <label for="mode">Simpan perubahan produk</label><select id="mode"><option value="manual">Manual: tekan Simpan di Digiflazz</option><option value="auto">Otomatis setelah seller dipilih</option></select>
+      <div class="row"><label for="rating">Rating minimal<input id="rating" type="number" min="0" max="5" step="0.1"></label><label for="reviews">Ulasan minimal<input id="reviews" type="number" min="0"></label></div>
+      <label for="cap">Batas harga global (Rp; 0 = ikut max produk)</label><input id="cap" type="number" min="0">
+      <label><input id="fill" type="checkbox"> Isi harga maksimum dari harga seller baru</label>
+      <label><input id="code" type="checkbox"> Buat kode layanan acak saat tambah produk</label>
+      <label for="preferred">Seller prioritas (pisah koma)</label><textarea id="preferred"></textarea>
+      <label for="blocked">Seller diblokir (pisah koma)</label><textarea id="blocked"></textarea>
+      <div id="status" class="status" role="status">Menunggu halaman Produk…</div>
+    </div><button class="bubble" id="toggle" aria-label="Buka pengaturan auto seller">⚡ Auto Seller</button>`;
+    const get=id=>ui.getElementById(id);
+    get("enabled").checked=settings.enabled;
+    get("mode").value=settings.saveMode;
+    get("rating").value=settings.minRating;
+    get("reviews").value=settings.minReviews;
+    get("cap").value=settings.priceCap;
+    get("fill").checked=settings.autoFillMaxPrice;
+    get("code").checked=settings.autoRandomCode;
+    get("preferred").value=settings.preferred;
+    get("blocked").value=settings.blocked;
+    status=message=>{get("status").textContent=message};
+    get("toggle").onclick=()=>get("box").classList.toggle("open");
+    ui.addEventListener("change",()=>{
+      settings={enabled:get("enabled").checked,saveMode:get("mode").value,minRating:Math.min(5,Math.max(0,Number(get("rating").value)||0)),minReviews:Math.max(0,Number(get("reviews").value)||0),priceCap:Math.max(0,Number(get("cap").value)||0),autoFillMaxPrice:get("fill").checked,autoRandomCode:get("code").checked,preferred:get("preferred").value,blocked:get("blocked").value};
+      localStorage.setItem(KEY,JSON.stringify(settings));update("Pengaturan tersimpan di browser ini.");
+    });
+    document.body.append(host);
+  }
+  let timer;
+  function init() {
+    panel();scanVue();fillNewCode();
+    const observer=new MutationObserver(()=>{clearTimeout(timer);timer=setTimeout(()=>{scanVue();fillNewCode()},180)});
+    observer.observe(document.documentElement,{childList:true,subtree:true});
+    setInterval(scanVue,1800);
+  }
+  if(testing) {module.exports={chooseSeller,reviewCount,patch};return}
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",init,{once:true});else init();
+})();
