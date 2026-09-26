@@ -572,13 +572,22 @@ async function api(req, env, url) {
       const page=bounded(url.searchParams.get("page"),1,100000,1);
       const q="%"+str(url.searchParams.get("q")).slice(0,80)+"%";
       const status=str(url.searchParams.get("status"));
-      const where="WHERE (p.sku LIKE ? OR p.name LIKE ? OR p.brand LIKE ?)"+(status==="issues"?" AND (p.seller_name='' OR p.seller_active=0 OR (p.max_price>0 AND p.price>p.max_price) OR (p.stock=0 AND p.unlimited_stock=0))":status==="locked"?" AND p.sku IN (SELECT buyer_sku_code FROM product_locks)":"");
-      const args=[q,q,q];
-      const [n,rows]=await Promise.all([
+      const category=str(url.searchParams.get("category")).slice(0,120);
+      const brand=str(url.searchParams.get("brand")).slice(0,120);
+      let where="WHERE (p.sku LIKE ? OR p.name LIKE ? OR p.brand LIKE ? OR p.category LIKE ?)";
+      const args=[q,q,q,q];
+      if(category){where+=" AND p.category=?";args.push(category)}
+      if(brand){where+=" AND p.brand=?";args.push(brand)}
+      if(status==="issues")where+=" AND (p.seller_name='' OR p.seller_active=0 OR (p.max_price>0 AND p.price>p.max_price) OR (p.stock=0 AND p.unlimited_stock=0))";
+      else if(status==="locked")where+=" AND p.sku IN (SELECT buyer_sku_code FROM product_locks)";
+      const brandSql=category?"SELECT DISTINCT brand FROM products WHERE category=? AND brand<>'' ORDER BY brand COLLATE NOCASE":"SELECT DISTINCT brand FROM products WHERE brand<>'' ORDER BY brand COLLATE NOCASE";
+      const [n,rows,categories,brands]=await Promise.all([
         env.DB.prepare("SELECT count(*) total FROM products p "+where).bind(...args).first(),
-        env.DB.prepare("SELECT p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.last_seen,l.buyer_sku_code IS NOT NULL AS locked FROM products p LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku "+where+" ORDER BY p.last_seen DESC,p.name LIMIT 50 OFFSET ?").bind(...args,(page-1)*50).all()
+        env.DB.prepare("SELECT p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.last_seen,l.buyer_sku_code IS NOT NULL AS locked FROM products p LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku "+where+" ORDER BY p.price ASC,p.name COLLATE NOCASE ASC,p.sku ASC LIMIT 50 OFFSET ?").bind(...args,(page-1)*50).all(),
+        env.DB.prepare("SELECT DISTINCT category FROM products WHERE category<>'' ORDER BY category COLLATE NOCASE").all(),
+        category?env.DB.prepare(brandSql).bind(category).all():env.DB.prepare(brandSql).all()
       ]);
-      return reply({ok:true,total:n.total,page,products:rows.results});
+      return reply({ok:true,total:n.total,page,products:rows.results,categories:categories.results.map(x=>x.category),brands:brands.results.map(x=>x.brand)});
     }
     const opt=path.match(/^\/api\/products\/([^/]+)\/options$/);
     if (method==="GET" && opt) {
