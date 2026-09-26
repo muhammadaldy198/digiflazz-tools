@@ -151,7 +151,29 @@ function listOf(obj, keys) {
   }
   return null;
 }
-function normalizeProduct(x) {
+function entityId(value) {
+  if (value && typeof value === "object") return str(value.id ?? value.value ?? value.key);
+  return str(value);
+}
+function entityName(value) {
+  if (value && typeof value === "object") return str(value.name ?? value.label ?? value.title ?? value.text);
+  return typeof value === "string" ? str(value) : "";
+}
+function entityMap(rows) {
+  const map=new Map();
+  for(const row of rows||[]) {
+    const id=entityId(row),name=entityName(row);
+    if(id&&name)map.set(id,name);
+  }
+  return map;
+}
+function metadataName(value,map,fallback="") {
+  const direct=entityName(value);
+  if(direct)return direct;
+  const id=entityId(value);
+  return (id&&map?.get(id))||str(fallback);
+}
+function normalizeProduct(x, metadata={}) {
   const sku = str(x.buyer_sku_code || x.code || x.buyerSkuCode || x.sku || (x.id ? "ID:"+x.id : ""));
   if (!sku) return null;
   const seller = x.seller || x.supplier || {};
@@ -159,9 +181,9 @@ function normalizeProduct(x) {
   return {
     sku, product_id: str(x.id ?? x.product_id ?? product.id),
     name: str(x.product_name ?? x.name ?? (typeof x.product==="string" ? x.product : null) ?? product.name ?? sku),
-    category: str(x.category?.name ?? product.category?.name ?? x.category ?? product.category),
-    brand: str(x.brand?.name ?? product.brand?.name ?? x.brand ?? product.brand),
-    product_type: str(x.type?.name ?? product.type?.name ?? x.type ?? product.type),
+    category: metadataName(x.category ?? product.category,metadata.categories,metadata.categoryName),
+    brand: metadataName(x.brand ?? product.brand,metadata.brands),
+    product_type: metadataName(x.type ?? product.type,metadata.types),
     seller_id: str(x.seller_id ?? seller.id ?? x.supplier_id),
     seller_name: str(x.seller_name ?? seller.name ?? (typeof x.seller==="string" ? x.seller : null) ?? x.supplier_name),
     price: bounded(x.price ?? x.seller_price ?? x.cost, 0, 1000000000, 0),
@@ -223,19 +245,27 @@ async function scan(env, reason = "manual") {
   const created = await env.DB.prepare("INSERT INTO scan_runs(status) VALUES('running')").run();
   const runId = created.meta.last_row_id;
   try {
-    const catalog = await remoteJson(env, "/api/v1/buyer/product/category");
+    const [catalog,brandCatalog,typeCatalog] = await Promise.all([
+      remoteJson(env, "/api/v1/buyer/product/category"),
+      remoteJson(env, "/api/v1/buyer/product/brand").catch(()=>null),
+      remoteJson(env, "/api/v1/buyer/product/type").catch(()=>null)
+    ]);
     const categories = listOf(catalog, ["data", "data.data", "categories"]);
     if (!categories) throw Error("Format kategori Digiflazz belum dikenali.");
+    const brands=listOf(brandCatalog,["data","data.data","brands"])||[];
+    const types=listOf(typeCatalog,["data","data.data","types"])||[];
+    const metadata={categories:entityMap(categories),brands:entityMap(brands),types:entityMap(types)};
     const items = [];
     for (const category of categories) {
-      const id = str(category.id);
+      const id = entityId(category);
       if (!id || !/^[a-zA-Z0-9_-]{1,80}$/.test(id)) continue;
       const response = await remoteJson(env, "/api/v1/buyer/product/category/" + encodeURIComponent(id) + "/");
       const members = listOf(response, ["data", "data.data", "products"]);
       if (!members) throw Error("Format produk kategori " + id + " belum dikenali.");
-      for (const member of members) items.push(member);
+      const categoryName=entityName(category)||metadata.categories.get(id)||id;
+      for (const member of members) items.push({member,categoryName});
     }
-    const products = items.map(normalizeProduct).filter(Boolean);
+    const products = items.map(x=>normalizeProduct(x.member,{...metadata,categoryName:x.categoryName})).filter(Boolean);
     if (items.length && !products.length) throw Error("Data produk tidak memiliki SKU yang dikenali.");
     let issues = 0;
     for (let i=0;i<products.length;i+=100) {
@@ -583,7 +613,7 @@ async function api(req, env, url) {
       const brandSql=category?"SELECT DISTINCT brand FROM products WHERE category=? AND brand<>'' ORDER BY brand COLLATE NOCASE":"SELECT DISTINCT brand FROM products WHERE brand<>'' ORDER BY brand COLLATE NOCASE";
       const [n,rows,categories,brands]=await Promise.all([
         env.DB.prepare("SELECT count(*) total FROM products p "+where).bind(...args).first(),
-        env.DB.prepare("SELECT p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.last_seen,l.buyer_sku_code IS NOT NULL AS locked FROM products p LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku "+where+" ORDER BY p.price ASC,p.name COLLATE NOCASE ASC,p.sku ASC LIMIT 50 OFFSET ?").bind(...args,(page-1)*50).all(),
+        env.DB.prepare("SELECT p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.last_seen,l.buyer_sku_code IS NOT NULL AS locked FROM products p LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku "+where+" ORDER BY CASE WHEN p.price<=0 THEN 1 ELSE 0 END,p.price ASC,p.name COLLATE NOCASE ASC,p.sku ASC LIMIT 50 OFFSET ?").bind(...args,(page-1)*50).all(),
         env.DB.prepare("SELECT DISTINCT category FROM products WHERE category<>'' ORDER BY category COLLATE NOCASE").all(),
         category?env.DB.prepare(brandSql).bind(category).all():env.DB.prepare(brandSql).all()
       ]);

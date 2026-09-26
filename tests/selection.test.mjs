@@ -84,3 +84,24 @@ test("seller cutoff uses start-to-end window including midnight crossover",()=>{
   assert.equal(inCutoffWindow("22:30","23:30",at("2026-09-26T11:30:00Z")),false);
   assert.equal(inCutoffWindow("00:00","00:00",at("2026-09-26T11:30:00Z")),false);
 });
+
+
+test("catalog metadata resolves Digiflazz category, brand, and type IDs to names",()=>{
+  const metadata={
+    categories:new Map([["cat1","Games"]]),
+    brands:new Map([["brand1","Mobile Legends"]]),
+    types:new Map([["type1","Game"]]),
+    categoryName:"Games"
+  };
+  const p=normalizeProduct({
+    code:"ML5",
+    product:"Mobile Legends 5 Diamond",
+    product_details:{category:{id:"cat1"},brand:{id:"brand1"},type:{id:"type1"}},
+    price:1500,status:true,status_sellerSku:1
+  },metadata);
+  assert.equal(p.category,"Games");
+  assert.equal(p.brand,"Mobile Legends");
+  assert.equal(p.product_type,"Game");
+  assert.notEqual(p.category,"[object Object]");
+  assert.notEqual(p.brand,"[object Object]");
+});
