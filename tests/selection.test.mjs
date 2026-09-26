@@ -105,3 +105,17 @@ test("catalog metadata resolves Digiflazz category, brand, and type IDs to names
   assert.notEqual(p.category,"[object Object]");
   assert.notEqual(p.brand,"[object Object]");
 });
+
+
+test("auto-switch always ranks the cheapest eligible seller first even when a pricier seller has a higher quality score", () => {
+  const product = { max_price: 0 };
+  const rows = [
+    { seller_id:"cheap", seller_name:"Cheap", price:10000, rating:4.1, review_count:"100", stock:10, unlimited_stock:0, connection:"HTTP", sla:"H+1", description:"", seller_status:1 },
+    { seller_id:"premium", seller_name:"Premium", price:11000, rating:5, review_count:"5000", stock:999, unlimited_stock:1, connection:"IP", sla:"H+0", description:"", seller_status:1 }
+  ];
+  const config = { minRating:4, minReviews:0, priceCap:0, weights:{price:40,connection:30,sla:20,stock:10} };
+  const result = rank(product, rows, [{seller_name:"Premium",mode:"preferred"}], null, config, null);
+  assert.equal(result[0].seller_id,"cheap");
+  assert.equal(result[0].price,10000);
+  assert.ok(result[1].score > result[0].score);
+});
