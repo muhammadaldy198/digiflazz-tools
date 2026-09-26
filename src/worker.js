@@ -8,7 +8,7 @@ const DEFAULTS = {
   saveMode: "manual", autoFillMaxPrice: false, proactiveScan: false,
   reoptimizeHours: 0, minSavingsPercent: 5, cooldownHours: 24,
   weights: { price: 40, connection: 30, sla: 20, stock: 10 },
-  autoRandomCode: false
+  autoRandomCode: true
 };
 const secureHeaders = {
   "cache-control": "no-store", "x-content-type-options": "nosniff",
@@ -297,11 +297,11 @@ function rank(product, rows, prefs, rule, config, zone) {
       if (clock >= x.end_cut_off) reasons.push("Lewat cut-off");
     }
     if (zone && !zone.patterns.every(p=>String(x.description||"").toLowerCase().includes(p.toLowerCase()))) reasons.push("Zona tidak cocok");
-    const peers = rows.map(s=>s.price).filter(n=>n>0), low=Math.min(...peers), high=Math.max(...peers);
-    const price = high===low ? 100 : 100*(high-x.price)/(high-low);
+    const peers = rows.map(s=>s.price).filter(n=>n>0), low=Math.min(...peers);
+    const price = x.price>0 && Number.isFinite(low) ? 100*low/x.price : 0;
     const connection = /ip/i.test(x.connection) ? 100 : /h2h/i.test(x.connection) ? 70 : 50;
     const sla = /h\+?0/i.test(x.sla) ? 100 : /h\+?1/i.test(x.sla) ? 60 : 30;
-    const stock = x.unlimited_stock ? 100 : x.stock > 0 ? 70 : 0;
+    const stock = x.unlimited_stock || x.stock > 0 ? 100 : 0;
     const w=config.weights;
     const score = Math.round(price*w.price/100+connection*w.connection/100+sla*w.sla/100+stock*w.stock/100+(x.rating||0)*3+(preferred.has(name)?20:0));
     return { ...x, eligible:!reasons.length, reasons, score };
@@ -417,6 +417,20 @@ async function updateMaxPrice(env,sku,amount) {
     throw error;
   }
 }
+async function reconcile(env,sku) {
+  const op=await env.DB.prepare("SELECT status,target_seller_id,started_at FROM switch_operations WHERE sku=?").bind(sku).first();
+  if(!op || !["pending","unknown"].includes(op.status)) throw Error("Tidak ada perubahan tertunda untuk diperiksa.");
+  if(op.status==="pending" && Date.now()-Date.parse(op.started_at.replace(" ","T")+"Z")<120000) throw Error("Permintaan masih diproses. Tunggu dua menit sebelum memeriksa ulang.");
+  const fresh=await freshProduct(env,sku);
+  const confirmed=op.target_seller_id.startsWith("max:")
+    ? Number(fresh.max_price)===Number(op.target_seller_id.slice(4))
+    : String(fresh.seller_sku_id)===op.target_seller_id;
+  const status=confirmed?"success":"error";
+  await env.DB.prepare("UPDATE switch_operations SET status=? WHERE sku=?").bind(status,sku).run();
+  if(!op.target_seller_id.startsWith("max:")) await env.DB.prepare("UPDATE switch_history SET status=? WHERE id=(SELECT id FROM switch_history WHERE buyer_sku_code=? AND status IN ('pending','unknown') ORDER BY id DESC LIMIT 1)").bind(status,sku).run();
+  await log(env,confirmed?"INFO":"WARN","reconcile",confirmed?"Perubahan terkonfirmasi di Digiflazz.":"Target tidak ditemukan pada data terbaru; periksa sebelum mengulang.",sku);
+  return {ok:true,confirmed,status};
+}
 async function discover(env) {
   const res = await remote(env,"/buyer-area",true);
   const html = (await res.text()).slice(0,750000);
@@ -508,7 +522,7 @@ async function api(req, env, url) {
     const opt=path.match(/^\/api\/products\/([^/]+)\/options$/);
     if (method==="GET" && opt) {
       const sku=decodeURIComponent(opt[1]);
-      try { const d=await rankedOptions(env,sku);return reply({ok:true,product:{...d.product,raw:undefined,current_seller_sku_id:JSON.parse(d.product.raw).seller_sku_id},options:d.options.map(({raw,...option})=>option),connectorReady:true}); }
+      try { const d=await rankedOptions(env,sku);const op=await env.DB.prepare("SELECT status,target_seller_id FROM switch_operations WHERE sku=?").bind(sku).first();return reply({ok:true,product:{...d.product,raw:undefined,current_seller_sku_id:JSON.parse(d.product.raw).seller_sku_id},operation:op,options:d.options.map(({raw,...option})=>option),connectorReady:true}); }
       catch(error) { await log(env,"WARN","seller-options",error.message,sku); }
       const d=await rankedOptions(env,sku,false);
       return reply({ok:true,product:{...d.product,raw:undefined,current_seller_sku_id:JSON.parse(d.product.raw).seller_sku_id},options:d.options.map(({raw,...option})=>option),connectorReady:false});
@@ -531,6 +545,8 @@ async function api(req, env, url) {
       const body=await getJson(req);
       return reply(await updateMaxPrice(env,decodeURIComponent(maxPrice[1]),Number(body.maxPrice)));
     }
+    const pending=path.match(/^\/api\/products\/([^/]+)\/reconcile$/);
+    if(method==="POST"&&pending)return reply(await reconcile(env,decodeURIComponent(pending[1])));
     if(method==="GET"&&path==="/api/sellers") {
       const rows=await env.DB.prepare("SELECT s.seller_id,s.name,s.rating,s.review_count,s.product_count,s.invoice,p.mode FROM sellers s LEFT JOIN seller_preferences p ON p.seller_name=s.name ORDER BY s.rating DESC,s.name LIMIT 1000").all();
       return reply({ok:true,sellers:rows.results});
@@ -605,8 +621,12 @@ async function api(req, env, url) {
       return reply({ok:true,settings:next});
     }
     if(method==="GET"&&path==="/api/random-code") {
-      const bytes=crypto.getRandomValues(new Uint8Array(5));
-      return reply({ok:true,code:"L"+[...bytes].map(n=>"0123456789ABCDEFGHJKMNPQRSTVWXYZ"[n%32]).join("")});
+      for(let attempt=0;attempt<5;attempt++) {
+        const bytes=crypto.getRandomValues(new Uint8Array(8));
+        const code="L"+[...bytes].map(n=>"0123456789ABCDEFGHJKMNPQRSTVWXYZ"[n%32]).join("");
+        if(!await env.DB.prepare("SELECT sku FROM products WHERE sku=?").bind(code).first())return reply({ok:true,code});
+      }
+      throw Error("Gagal mendapatkan kode unik. Coba lagi.");
     }
     return failure("Halaman API tidak ditemukan.",404);
   } catch(error) {
@@ -641,6 +661,21 @@ export default {
               await env.DB.prepare("INSERT INTO app_settings(key,value) VALUES('search_preflight_ok','true')").run();
               await log(env,"INFO","search-preflight","Pencarian ulang SKU Digiflazz terverifikasi.",probe.sku);
             } catch(error) { await log(env,"WARN","search-preflight",error.message,probe.sku); }
+          }
+        }
+        if(cfg.proactiveScan) {
+          const sample=await env.DB.prepare("SELECT p.sku FROM products p LEFT JOIN seller_options o ON o.sku=p.sku WHERE p.active=1 AND p.seller_active=1 AND p.price>0 AND (p.stock>0 OR p.unlimited_stock=1) GROUP BY p.sku ORDER BY min(COALESCE(o.last_seen,'1970-01-01')) ASC LIMIT 5").all();
+          for(const {sku} of sample.results) {
+            try {
+              const data=await rankedOptions(env,sku);
+              const current=JSON.parse(data.product.raw);
+              const best=data.options.find(o=>o.eligible && o.seller_id!==String(current.seller_sku_id) && o.price<data.product.price*(1-cfg.minSavingsPercent/100));
+              if(best) {
+                const saving=Math.round((1-best.price/data.product.price)*100);
+                await log(env,"WARN","better_seller_available",best.seller_name+" lebih murah "+saving+"% (Rp"+best.price+").",sku);
+                if(cfg.autoSwitch && !cfg.dryRun && cfg.reoptimizeHours>0) await switchSeller(env,sku,best.seller_id,"auto");
+              }
+            } catch(error) { await log(env,"WARN","proactive",error.message,sku); }
           }
         }
         if(cfg.autoSwitch && !cfg.dryRun) {
