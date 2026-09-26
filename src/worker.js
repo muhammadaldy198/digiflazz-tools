@@ -110,13 +110,14 @@ async function authorize(request, env) {
 async function conn(env) {
   return env.DB.prepare("SELECT encrypted_payload,iv,source_host,last_test_status,last_test_at,updated_at FROM digiflazz_connections WHERE id=1").first();
 }
-async function remote(env, path) {
+async function remote(env, path, htmlRequest = false) {
   const row = await conn(env);
   if (!row || !env.SESSION_ENCRYPTION_KEY) throw Error("Sesi Digiflazz belum terhubung.");
   const session = await unseal(row, env.SESSION_ENCRYPTION_KEY);
   const target = hostUrl("https://member.digiflazz.com" + path);
-  const headers = { ...session.headers, accept: "application/json, text/html;q=0.9" };
+  const headers = { ...session.headers, accept: htmlRequest ? "text/html,application/xhtml+xml" : "application/json" };
   delete headers.host;
+  if (htmlRequest) delete headers["x-requested-with"];
   const res = await fetch(target, { method: "GET", headers, redirect: "manual", signal: AbortSignal.timeout(20000) });
   if (res.status === 401 || res.status === 403 || (res.status >= 300 && res.status < 400)) throw Error("Sesi Digiflazz kedaluwarsa atau ditolak (HTTP " + res.status + ").");
   if (!res.ok) throw Error("Digiflazz mengembalikan HTTP " + res.status + " untuk " + target.pathname);
@@ -137,22 +138,22 @@ function listOf(obj, keys) {
   return null;
 }
 function normalizeProduct(x) {
-  const sku = str(x.buyer_sku_code ?? x.buyerSkuCode ?? x.sku ?? x.code);
+  const sku = str(x.buyer_sku_code || x.code || x.buyerSkuCode || x.sku || (x.id ? "ID:"+x.id : ""));
   if (!sku) return null;
   const seller = x.seller || x.supplier || {};
-  const product = x.product || {};
+  const product = typeof x.product_details === "object" ? x.product_details : typeof x.product === "object" ? x.product : {};
   return {
-    sku, product_id: str(x.product_id ?? product.id ?? x.id),
-    name: str(x.product_name ?? x.name ?? product.name ?? sku),
-    category: str(x.category?.name ?? x.category ?? product.category),
-    brand: str(x.brand?.name ?? x.brand ?? product.brand),
-    product_type: str(x.type?.name ?? x.type ?? product.type),
+    sku, product_id: str(x.id ?? x.product_id ?? product.id),
+    name: str(x.product_name ?? x.name ?? (typeof x.product==="string" ? x.product : null) ?? product.name ?? sku),
+    category: str(x.category?.name ?? product.category?.name ?? x.category ?? product.category),
+    brand: str(x.brand?.name ?? product.brand?.name ?? x.brand ?? product.brand),
+    product_type: str(x.type?.name ?? product.type?.name ?? x.type ?? product.type),
     seller_id: str(x.seller_id ?? seller.id ?? x.supplier_id),
-    seller_name: str(x.seller_name ?? seller.name ?? x.supplier_name),
+    seller_name: str(x.seller_name ?? seller.name ?? (typeof x.seller==="string" ? x.seller : null) ?? x.supplier_name),
     price: bounded(x.price ?? x.seller_price ?? x.cost, 0, 1000000000, 0),
     max_price: bounded(x.max_price ?? x.maxPrice, 0, 1000000000, 0),
     active: bool(x.buyer_product_status ?? x.status ?? x.is_active) ? 1 : 0,
-    seller_active: bool(x.seller_product_status ?? seller.active ?? x.is_seller_active ?? true) ? 1 : 0,
+    seller_active: x.status_sellerSku != null ? (Number(x.status_sellerSku) <= 0 ? 0 : 1) : bool(x.seller_product_status ?? seller.active ?? x.is_seller_active ?? true) ? 1 : 0,
     stock: x.stock == null ? null : bounded(x.stock, 0, 1000000000, 0),
     unlimited_stock: bool(x.unlimited_stock ?? x.unlimitedStock) ? 1 : 0,
     end_cut_off: str(x.end_cut_off ?? seller.end_cut_off),
@@ -207,9 +208,18 @@ async function scan(env, reason = "manual") {
   const created = await env.DB.prepare("INSERT INTO scan_runs(status) VALUES('running')").run();
   const runId = created.meta.last_row_id;
   try {
-    const data = await remoteJson(env, "/api/v1/buyer/product");
-    const items = listOf(data, ["data.data", "data.products", "data.items", "data", "products", "items", "result.data", "result"]);
-    if (!items) throw Error("Format katalog belum dikenali; kunci respons: " + Object.keys(data || {}).slice(0, 10).join(", "));
+    const catalog = await remoteJson(env, "/api/v1/buyer/product/category");
+    const categories = listOf(catalog, ["data", "data.data", "categories"]);
+    if (!categories) throw Error("Format kategori Digiflazz belum dikenali.");
+    const items = [];
+    for (const category of categories) {
+      const id = str(category.id);
+      if (!id || !/^[a-zA-Z0-9_-]{1,80}$/.test(id)) continue;
+      const response = await remoteJson(env, "/api/v1/buyer/product/category/" + encodeURIComponent(id) + "/");
+      const members = listOf(response, ["data", "data.data", "products"]);
+      if (!members) throw Error("Format produk kategori " + id + " belum dikenali.");
+      for (const member of members) items.push(member);
+    }
     const products = items.map(normalizeProduct).filter(Boolean);
     if (items.length && !products.length) throw Error("Data produk tidak memiliki SKU yang dikenali.");
     let issues = 0;
@@ -243,6 +253,8 @@ async function scan(env, reason = "manual") {
       const stmts = sellers.map(normalizeSeller).filter(Boolean).map(x=>env.DB.prepare("INSERT INTO sellers(seller_id,name,rating,review_count,product_count,invoice,raw,last_seen) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(seller_id) DO UPDATE SET name=excluded.name,rating=excluded.rating,review_count=excluded.review_count,product_count=excluded.product_count,invoice=excluded.invoice,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(x.seller_id,x.name,x.rating,x.review_count,x.product_count,x.invoice,x.raw));
       for(let i=0;i<stmts.length;i+=80) await env.DB.batch(stmts.slice(i,i+80));
     } catch (error) { await log(env,"WARN","sellers",error.message); }
+    const sellerStmts = [...new Set(products.map(x=>x.seller_name).filter(Boolean))].map(name=>env.DB.prepare("INSERT INTO sellers(seller_id,name,raw) VALUES(?,?,?) ON CONFLICT(seller_id) DO NOTHING").bind(name,name,"{}"));
+    for (let i=0;i<sellerStmts.length;i+=80) await env.DB.batch(sellerStmts.slice(i,i+80));
     await env.DB.prepare("UPDATE scan_runs SET status='success',finished_at=CURRENT_TIMESTAMP,total=?,issues=?,message=? WHERE id=?").bind(products.length,issues,reason,runId).run();
     await log(env,"INFO","scan",products.length+" produk dipindai; "+issues+" perlu perhatian.");
     return { ok:true,total:products.length,issues };
@@ -280,11 +292,31 @@ function rank(product, rows, prefs, rule, config, zone) {
     return { ...x, eligible:!reasons.length, reasons, score };
   }).sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score||a.price-b.price);
 }
+async function refreshOptions(env, sku, productId) {
+  if (!productId || !/^[a-zA-Z0-9_-]{1,80}$/.test(productId)) return 0;
+  const response = await remoteJson(env, "/api/v1/buyer/product/seller/" + encodeURIComponent(productId));
+  const choices = listOf(response, ["data", "data.data", "sellers"]);
+  if (!choices) throw Error("Format alternatif seller belum dikenali.");
+  const cmds = choices.map(x => {
+    const id = str(x.id ?? x.seller_sku_id);
+    if (!id) return null;
+    const name = str(x.seller ?? x.seller_name ?? x.seller_details?.company_name ?? id);
+    return env.DB.prepare("INSERT INTO seller_options(sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description,raw,last_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(sku,seller_id) DO UPDATE SET seller_name=excluded.seller_name,price=excluded.price,rating=excluded.rating,stock=excluded.stock,unlimited_stock=excluded.unlimited_stock,connection=excluded.connection,sla=excluded.sla,description=excluded.description,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(sku,id,name,bounded(x.price,0,1000000000),x.seller_details?.review_avg ?? x.review_avg ?? null,x.stock??null,bool(x.unlimited_stock)?1:0,str(x.connectionType??x.connection),str(x.sla),str(x.deskripsi??x.description),JSON.stringify(x).slice(0,20000));
+  }).filter(Boolean);
+  for (let i=0;i<cmds.length;i+=80) await env.DB.batch(cmds.slice(i,i+80));
+  return cmds.length;
+}
 async function discover(env) {
-  const res = await remote(env,"/buyer-area");
+  const res = await remote(env,"/buyer-area",true);
   const html = (await res.text()).slice(0,750000);
   const scripts = [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map(x=>x[1]).filter(x=>!x.startsWith("//")).slice(0,12);
   const found = new Set();
+  for (const m of html.matchAll(/\/api\/v1\/buyer\/[a-zA-Z0-9_/$?{}.:+-]+/g)) found.add(m[0].slice(0,200));
+  const title = (html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]||"").slice(0,100);
+  let responseKeys = [];
+  try { responseKeys = Object.keys(JSON.parse(html)); } catch {}
+  const summary = { title, htmlBytes:html.length,contentType:res.headers.get("content-type"), responseKeys, scripts:scripts.map(s=>{try{return new URL(s,"https://member.digiflazz.com").pathname}catch{return s}}).slice(0,12) };
+  await env.DB.prepare("INSERT INTO app_settings(key,value) VALUES('discovery_summary',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(summary)).run();
   for (const src of scripts) {
     let target;
     try { target = new URL(src,"https://member.digiflazz.com"); hostUrl(target.toString()); } catch { continue; }
@@ -297,8 +329,8 @@ async function discover(env) {
   }
   const paths = [...found].slice(0,300);
   for (const path of paths) await env.DB.prepare("INSERT INTO api_discovery(route,source_url,context) VALUES(?,?,?) ON CONFLICT(route) DO NOTHING").bind(path,"https://member.digiflazz.com/buyer-area","script reference").run();
-  await log(env,"INFO","discovery",paths.length+" jalur API ditemukan; belum ada aksi write yang diaktifkan.");
-  return {ok:true,count:paths.length,paths};
+  await log(env,"INFO","discovery",paths.length+" jalur API ditemukan; halaman "+(title||"(tanpa judul)")+", "+scripts.length+" skrip.");
+  return {ok:true,count:paths.length,paths,summary};
 }
 async function api(req, env, url) {
   const path=url.pathname, method=req.method;
@@ -364,6 +396,10 @@ async function api(req, env, url) {
     const opt=path.match(/^\/api\/products\/([^/]+)\/options$/);
     if (method==="GET" && opt) {
       const sku=decodeURIComponent(opt[1]);
+      const entry=await env.DB.prepare("SELECT product_id FROM products WHERE sku=?").bind(sku).first();
+      if (!entry) return failure("Produk tidak ditemukan.",404);
+      try { await refreshOptions(env,sku,entry.product_id); }
+      catch(error) { await log(env,"WARN","seller-options",error.message,sku); }
       const [p,o,preferences,rule,zone,cfg]=await Promise.all([
         env.DB.prepare("SELECT p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.end_cut_off,l.buyer_sku_code IS NOT NULL AS locked FROM products p LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku WHERE p.sku=?").bind(sku).first(),
         env.DB.prepare("SELECT sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description FROM seller_options WHERE sku=?").bind(sku).all(),
@@ -475,7 +511,14 @@ export default {
       const cfg=await settings(env);
       const last=await env.DB.prepare("SELECT finished_at FROM scan_runs WHERE status='success' ORDER BY id DESC LIMIT 1").first();
       const due=!last || Date.now()-Date.parse(last.finished_at.replace(" ","T")+"Z")>=cfg.scanIntervalMinutes*60000;
-      if(cfg.scanEnabled&&due) await scan(env,"cron");
+      if(cfg.scanEnabled&&due) {
+        await scan(env,"cron");
+        const probe=await env.DB.prepare("SELECT sku,product_id FROM products WHERE seller_name='' OR seller_active=0 OR (max_price>0 AND price>max_price) OR (stock=0 AND unlimited_stock=0) ORDER BY last_seen DESC LIMIT 1").first();
+        if(probe) {
+          try { const count=await refreshOptions(env,probe.sku,probe.product_id);await log(env,"INFO","seller-options",count+" kandidat dibaca untuk satu produk yang perlu perhatian.",probe.sku); }
+          catch(error) { await log(env,"WARN","seller-options",error.message,probe.sku); }
+        }
+      }
       const known=await env.DB.prepare("SELECT count(*) total FROM api_discovery").first();
       const previous=await env.DB.prepare("SELECT value FROM app_settings WHERE key='discovery_last_attempt'").first();
       if(known.total===0&&await conn(env)&&(!previous||Date.now()-Date.parse(previous.value)>86400000)) {
