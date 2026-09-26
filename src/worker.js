@@ -355,7 +355,10 @@ function rank(product, rows, prefs, rule, config, zone) {
     const w=config.weights;
     const score = Math.round(price*w.price/100+connection*w.connection/100+sla*w.sla/100+stock*w.stock/100+(x.rating||0)*3+(preferred.has(name)?20:0));
     return { ...x, eligible:!reasons.length, reasons, score };
-  }).sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score||a.price-b.price);
+  }).sort((a,b)=>
+    Number(b.eligible)-Number(a.eligible) ||
+    (a.eligible && b.eligible ? (Number(a.price)-Number(b.price) || b.score-a.score) : (Number(a.price)-Number(b.price) || b.score-a.score))
+  );
 }
 async function refreshOptions(env, sku, productId) {
   if (!productId || !/^[a-zA-Z0-9_-]{1,80}$/.test(productId)) return 0;
