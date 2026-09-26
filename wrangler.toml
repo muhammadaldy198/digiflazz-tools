@@ -2,6 +2,10 @@ name = "digiflazz-tools"
 main = "src/index.js"
 compatibility_date = "2026-09-26"
 
+[vars]
+ACCESS_TEAM_DOMAIN = "lfamilia.cloudflareaccess.com"
+ACCESS_AUD = "b315d4e58e3385d017b0cb3455fd706e7b036cb7028f3e4388e5cb5f00ea1921"
+
 [triggers]
 crons = ["*/5 * * * *"]
 

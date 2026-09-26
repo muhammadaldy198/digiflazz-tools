@@ -1,0 +1,487 @@
+// Compiled into index.js with the interface from ui.html. Never store credentials here.
+const HTML = __HTML__;
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+const DEFAULTS = {
+  scanEnabled: false, dryRun: true, autoSwitch: false, scanIntervalMinutes: 5,
+  minRating: 0, minReviews: 0, priceCap: 0, preserveMaxPrice: true,
+  saveMode: "manual", autoFillMaxPrice: false, proactiveScan: false,
+  reoptimizeHours: 0, minSavingsPercent: 5, cooldownHours: 24,
+  weights: { price: 40, connection: 30, sla: 20, stock: 10 },
+  autoRandomCode: false
+};
+const secureHeaders = {
+  "cache-control": "no-store", "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer", "x-frame-options": "DENY"
+};
+function reply(value, status = 200) {
+  return Response.json(value, { status, headers: { ...secureHeaders, "content-security-policy": "default-src 'none'; frame-ancestors 'none'" } });
+}
+function failure(error, status = 400) {
+  return reply({ ok: false, error: error instanceof Error ? error.message : String(error) }, status);
+}
+function bounded(value, min, max, fallback = min) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
+function bool(v) { return v === true || v === 1 || v === "true"; }
+function str(v) { return String(v ?? "").trim(); }
+function domainAllowed(host) { return host.toLowerCase() === "member.digiflazz.com"; }
+function hostUrl(value) {
+  const u = new URL(value);
+  if (u.protocol !== "https:" || !domainAllowed(u.hostname)) throw Error("Alamat Digiflazz tidak sah.");
+  return u;
+}
+async function getJson(req) {
+  if (!req.headers.get("content-type")?.startsWith("application/json")) throw Error("Gunakan JSON.");
+  const s = await req.text();
+  if (s.length > 100000) throw Error("Permintaan terlalu besar.");
+  return JSON.parse(s || "{}");
+}
+function fromBase64(s) {
+  const data = atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(data, x => x.charCodeAt(0));
+}
+function toBase64(bytes) { return btoa(String.fromCharCode(...bytes)); }
+async function sessionKey(secret) {
+  const hash = await crypto.subtle.digest("SHA-256", encoder.encode(secret));
+  return crypto.subtle.importKey("raw", hash, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+async function seal(data, secret) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await sessionKey(secret), encoder.encode(JSON.stringify(data)));
+  return { encrypted: toBase64(new Uint8Array(cipher)), iv: toBase64(iv) };
+}
+async function unseal(row, secret) {
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromBase64(row.iv) }, await sessionKey(secret), fromBase64(row.encrypted_payload));
+  return JSON.parse(decoder.decode(plain));
+}
+function option(source, name) {
+  const clean = name.replace(/[.*+?^$()|[\]\\]/g, "\\$&");
+  const m = source.match(new RegExp("(?:^|\\s)" + clean + "\\s+(?:'([^']*)'|\"([^\"]*)\"|(\\S+))", "i"));
+  return m ? m[1] || m[2] || m[3] || null : null;
+}
+function parseCurl(value) {
+  const source = str(value).replace(/\\\r?\n/g, " ");
+  if (!/^curl\s/i.test(source) || source.length > 100000) throw Error("Masukkan cURL GET dari Digiflazz.");
+  const m = source.match(/['"](https:\/\/[^'"]+)['"]/) || source.match(/\b(https:\/\/[^\s]+)/);
+  if (!m) throw Error("URL HTTPS tidak ditemukan.");
+  const url = hostUrl(m[1]);
+  const method = str(option(source, "-X") || option(source, "--request") || "GET").toUpperCase();
+  if (!["GET", "HEAD"].includes(method)) throw Error("Gunakan request GET/HEAD.");
+  const allowed = new Set(["cookie", "x-csrf-token", "x-xsrf-token", "user-agent", "accept", "x-requested-with"]);
+  const headers = {};
+  for (const h of source.matchAll(/(?:^|\s)(?:-H|--header)\s+(?:'([^']*)'|"([^"]*)")/gi)) {
+    const raw = h[1] || h[2] || "";
+    const at = raw.indexOf(":");
+    if (at > 0) {
+      const name = raw.slice(0, at).trim().toLowerCase();
+      if (allowed.has(name)) headers[name] = raw.slice(at + 1).trim();
+    }
+  }
+  headers.cookie ||= option(source, "-b") || option(source, "--cookie");
+  if (!headers.cookie) throw Error("Cookie sesi tidak ditemukan.");
+  return { url: url.toString(), method, headers, capturedAt: new Date().toISOString() };
+}
+async function authorize(request, env) {
+  if (!env.ACCESS_AUD || !env.ACCESS_TEAM_DOMAIN) return false;
+  const jwt = request.headers.get("cf-access-jwt-assertion");
+  if (!jwt) return false;
+  const parts = jwt.split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const header = JSON.parse(decoder.decode(fromBase64(parts[0])));
+    const payload = JSON.parse(decoder.decode(fromBase64(parts[1])));
+    if (!Array.isArray(payload.aud) || !payload.aud.includes(env.ACCESS_AUD) || payload.exp <= Math.floor(Date.now() / 1000)) return false;
+    const certUrl = "https://" + env.ACCESS_TEAM_DOMAIN + "/cdn-cgi/access/certs";
+    if (!globalThis.__accessCertCache || globalThis.__accessCertCache.expires < Date.now()) {
+      const certs = await fetch(certUrl).then(r => r.json());
+      globalThis.__accessCertCache = { keys: certs.keys || [], expires: Date.now() + 600000 };
+    }
+    const certs = globalThis.__accessCertCache;
+    const jwk = certs.keys?.find(k => k.kid === header.kid);
+    if (!jwk || !["RS256", "ES256"].includes(header.alg)) return false;
+    const algorithm = header.alg === "RS256" ? { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" } : { name: "ECDSA", namedCurve: "P-256" };
+    const key = await crypto.subtle.importKey("jwk", jwk, algorithm, false, ["verify"]);
+    const verifyParams = header.alg === "ES256" ? { name: "ECDSA", hash: "SHA-256" } : algorithm;
+    return crypto.subtle.verify(verifyParams, key, fromBase64(parts[2]), encoder.encode(parts[0] + "." + parts[1]));
+  } catch { return false; }
+}
+async function conn(env) {
+  return env.DB.prepare("SELECT encrypted_payload,iv,source_host,last_test_status,last_test_at,updated_at FROM digiflazz_connections WHERE id=1").first();
+}
+async function remote(env, path) {
+  const row = await conn(env);
+  if (!row || !env.SESSION_ENCRYPTION_KEY) throw Error("Sesi Digiflazz belum terhubung.");
+  const session = await unseal(row, env.SESSION_ENCRYPTION_KEY);
+  const target = hostUrl("https://member.digiflazz.com" + path);
+  const headers = { ...session.headers, accept: "application/json, text/html;q=0.9" };
+  delete headers.host;
+  const res = await fetch(target, { method: "GET", headers, redirect: "manual", signal: AbortSignal.timeout(20000) });
+  if (res.status === 401 || res.status === 403 || (res.status >= 300 && res.status < 400)) throw Error("Sesi Digiflazz kedaluwarsa atau ditolak (HTTP " + res.status + ").");
+  if (!res.ok) throw Error("Digiflazz mengembalikan HTTP " + res.status + " untuk " + target.pathname);
+  return res;
+}
+async function remoteJson(env, path) {
+  const res = await remote(env, path);
+  if (!res.headers.get("content-type")?.includes("json")) throw Error("Digiflazz tidak mengembalikan JSON untuk " + path);
+  return res.json();
+}
+function listOf(obj, keys) {
+  if (Array.isArray(obj)) return obj;
+  for (const k of keys) {
+    const parts = k.split(".");
+    const v = parts.reduce((a, p) => a?.[p], obj);
+    if (Array.isArray(v)) return v;
+  }
+  return null;
+}
+function normalizeProduct(x) {
+  const sku = str(x.buyer_sku_code ?? x.buyerSkuCode ?? x.sku ?? x.code);
+  if (!sku) return null;
+  const seller = x.seller || x.supplier || {};
+  const product = x.product || {};
+  return {
+    sku, product_id: str(x.product_id ?? product.id ?? x.id),
+    name: str(x.product_name ?? x.name ?? product.name ?? sku),
+    category: str(x.category?.name ?? x.category ?? product.category),
+    brand: str(x.brand?.name ?? x.brand ?? product.brand),
+    product_type: str(x.type?.name ?? x.type ?? product.type),
+    seller_id: str(x.seller_id ?? seller.id ?? x.supplier_id),
+    seller_name: str(x.seller_name ?? seller.name ?? x.supplier_name),
+    price: bounded(x.price ?? x.seller_price ?? x.cost, 0, 1000000000, 0),
+    max_price: bounded(x.max_price ?? x.maxPrice, 0, 1000000000, 0),
+    active: bool(x.buyer_product_status ?? x.status ?? x.is_active) ? 1 : 0,
+    seller_active: bool(x.seller_product_status ?? seller.active ?? x.is_seller_active ?? true) ? 1 : 0,
+    stock: x.stock == null ? null : bounded(x.stock, 0, 1000000000, 0),
+    unlimited_stock: bool(x.unlimited_stock ?? x.unlimitedStock) ? 1 : 0,
+    end_cut_off: str(x.end_cut_off ?? seller.end_cut_off),
+    raw: JSON.stringify(x).slice(0, 40000)
+  };
+}
+function normalizeSeller(x) {
+  const id = str(x.id ?? x.seller_id ?? x.company_id ?? x.name ?? x.seller_name);
+  if (!id) return null;
+  return {
+    seller_id: id, name: str(x.company_name ?? x.seller_name ?? x.name ?? id),
+    rating: x.review_avg == null && x.rating == null ? null : bounded(x.review_avg ?? x.rating, 0, 5, 0),
+    review_count: x.review_count == null ? null : bounded(x.review_count, 0, 10000000),
+    product_count: x.product_count == null ? null : bounded(x.product_count, 0, 10000000),
+    invoice: x.tax_invoice == null ? null : bool(x.tax_invoice) ? 1 : 0,
+    raw: JSON.stringify(x).slice(0, 20000)
+  };
+}
+async function log(env, level, kind, message, sku = null) {
+  await env.DB.prepare("INSERT INTO events(level,kind,sku,message) VALUES(?,?,?,?)").bind(level, kind, sku, String(message).slice(0, 400)).run();
+}
+async function settings(env) {
+  const rows = await env.DB.prepare("SELECT key,value FROM app_settings").all();
+  const values = { ...DEFAULTS };
+  for (const r of rows.results) {
+    if (r.key in DEFAULTS) {
+      try { values[r.key] = JSON.parse(r.value); } catch {}
+    }
+  }
+  return values;
+}
+function validateSettings(input, current) {
+  const next = { ...current };
+  for (const [key, value] of Object.entries(input)) {
+    if (!(key in DEFAULTS)) continue;
+    if (["scanEnabled","dryRun","autoSwitch","preserveMaxPrice","autoFillMaxPrice","proactiveScan","autoRandomCode"].includes(key)) next[key] = bool(value);
+    else if (["minRating","minReviews","priceCap","scanIntervalMinutes","reoptimizeHours","minSavingsPercent","cooldownHours"].includes(key)) {
+      const limits = {minRating:[0,5],minReviews:[0,100000],priceCap:[0,1000000000],scanIntervalMinutes:[5,1440],reoptimizeHours:[0,720],minSavingsPercent:[0,100],cooldownHours:[1,720]};
+      next[key] = bounded(value, ...limits[key], current[key]);
+    } else if (key === "saveMode" && ["manual","auto"].includes(value)) next[key] = value;
+    else if (key === "weights") {
+      const w = Object.fromEntries(["price","connection","sla","stock"].map(k => [k, bounded(value?.[k],0,100,0)]));
+      if (Object.values(w).reduce((a,b)=>a+b,0) !== 100) throw Error("Total bobot harus 100%.");
+      next.weights = w;
+    }
+  }
+  // Switching requires a separately verified connector. A settings toggle cannot authorize an unknown request.
+  if (next.autoSwitch && !next.dryRun) throw Error("Auto-switch live menunggu endpoint Digiflazz yang terverifikasi.");
+  return next;
+}
+async function scan(env, reason = "manual") {
+  const created = await env.DB.prepare("INSERT INTO scan_runs(status) VALUES('running')").run();
+  const runId = created.meta.last_row_id;
+  try {
+    const data = await remoteJson(env, "/api/v1/buyer/product");
+    const items = listOf(data, ["data.data", "data.products", "data.items", "data", "products", "items", "result.data", "result"]);
+    if (!items) throw Error("Format katalog belum dikenali; kunci respons: " + Object.keys(data || {}).slice(0, 10).join(", "));
+    const products = items.map(normalizeProduct).filter(Boolean);
+    if (items.length && !products.length) throw Error("Data produk tidak memiliki SKU yang dikenali.");
+    let issues = 0;
+    for (let i=0;i<products.length;i+=100) {
+      const chunk = products.slice(i,i+100);
+      const old = await env.DB.prepare("SELECT sku,price,seller_name,active FROM products WHERE sku IN (" + chunk.map(()=>"?").join(",") + ")").bind(...chunk.map(x=>x.sku)).all();
+      const before = new Map(old.results.map(x=>[x.sku,x]));
+      const queries = [];
+      for (const p of chunk) {
+        const previous = before.get(p.sku);
+        const problem = !p.seller_name || !p.seller_active || (p.max_price > 0 && p.price > p.max_price) || (!p.unlimited_stock && p.stock === 0);
+        if (problem) issues++;
+        queries.push(env.DB.prepare("INSERT INTO products(sku,product_id,name,category,brand,product_type,seller_id,seller_name,price,max_price,active,seller_active,stock,unlimited_stock,end_cut_off,raw,last_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(sku) DO UPDATE SET product_id=excluded.product_id,name=excluded.name,category=excluded.category,brand=excluded.brand,product_type=excluded.product_type,seller_id=excluded.seller_id,seller_name=excluded.seller_name,price=excluded.price,max_price=excluded.max_price,active=excluded.active,seller_active=excluded.seller_active,stock=excluded.stock,unlimited_stock=excluded.unlimited_stock,end_cut_off=excluded.end_cut_off,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_id,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.end_cut_off,p.raw));
+        if (previous && previous.price !== p.price) {
+          queries.push(env.DB.prepare("INSERT INTO price_history(buyer_sku_code,seller_name,price) VALUES(?,?,?)").bind(p.sku,p.seller_name,p.price));
+          queries.push(env.DB.prepare("INSERT INTO events(level,kind,sku,message) VALUES('INFO','price',?,?)").bind(p.sku,"Harga berubah Rp"+previous.price+" → Rp"+p.price));
+        }
+        if (previous && previous.seller_name !== p.seller_name) queries.push(env.DB.prepare("INSERT INTO events(level,kind,sku,message) VALUES('INFO','seller',?,?)").bind(p.sku,"Seller berubah: "+(previous.seller_name||"—")+" → "+(p.seller_name||"—")));
+        const embedded = listOf(JSON.parse(p.raw), ["sellers","suppliers","seller_products","alternatives"]);
+        if (embedded) for (const raw of embedded.slice(0,100)) {
+          const s = normalizeSeller(raw); if (!s) continue;
+          const price = bounded(raw.price,0,1000000000);
+          queries.push(env.DB.prepare("INSERT INTO seller_options(sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description,raw,last_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(sku,seller_id) DO UPDATE SET seller_name=excluded.seller_name,price=excluded.price,rating=excluded.rating,stock=excluded.stock,unlimited_stock=excluded.unlimited_stock,connection=excluded.connection,sla=excluded.sla,description=excluded.description,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(p.sku,s.seller_id,s.name,price,s.rating,raw.stock??null,bool(raw.unlimited_stock)?1:0,str(raw.connection),str(raw.sla),str(raw.desc??raw.description),JSON.stringify(raw).slice(0,20000)));
+        }
+      }
+      for (let j=0;j<queries.length;j+=80) await env.DB.batch(queries.slice(j,j+80));
+    }
+    try {
+      const sd = await remoteJson(env, "/api/v1/buyer/seller");
+      const sellers = listOf(sd,["data.data","data.sellers","data","sellers","result.data","result"]) || [];
+      const stmts = sellers.map(normalizeSeller).filter(Boolean).map(x=>env.DB.prepare("INSERT INTO sellers(seller_id,name,rating,review_count,product_count,invoice,raw,last_seen) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(seller_id) DO UPDATE SET name=excluded.name,rating=excluded.rating,review_count=excluded.review_count,product_count=excluded.product_count,invoice=excluded.invoice,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(x.seller_id,x.name,x.rating,x.review_count,x.product_count,x.invoice,x.raw));
+      for(let i=0;i<stmts.length;i+=80) await env.DB.batch(stmts.slice(i,i+80));
+    } catch (error) { await log(env,"WARN","sellers",error.message); }
+    await env.DB.prepare("UPDATE scan_runs SET status='success',finished_at=CURRENT_TIMESTAMP,total=?,issues=?,message=? WHERE id=?").bind(products.length,issues,reason,runId).run();
+    await log(env,"INFO","scan",products.length+" produk dipindai; "+issues+" perlu perhatian.");
+    return { ok:true,total:products.length,issues };
+  } catch (error) {
+    await env.DB.prepare("UPDATE scan_runs SET status='error',finished_at=CURRENT_TIMESTAMP,message=? WHERE id=?").bind(error.message,runId).run();
+    await log(env,"ERROR","scan",error.message);
+    throw error;
+  }
+}
+function rank(product, rows, prefs, rule, config, zone) {
+  const blocked = new Set(prefs.filter(p=>p.mode==="blocked").map(p=>p.seller_name.toLowerCase()));
+  const preferred = new Set(prefs.filter(p=>p.mode==="preferred").map(p=>p.seller_name.toLowerCase()));
+  const max = rule?.max_price || product.max_price || config.priceCap || Infinity;
+  const minRating = rule?.min_rating ?? config.minRating;
+  return rows.map(x => {
+    const reasons = [];
+    const name = x.seller_name.toLowerCase();
+    if (blocked.has(name)) reasons.push("Seller diblokir");
+    if (x.price > max) reasons.push("Harga di atas batas");
+    if (x.rating != null && x.rating < minRating) reasons.push("Rating kurang");
+    if (rule?.require_stock !== 0 && !x.unlimited_stock && x.stock === 0) reasons.push("Stok habis");
+    if (rule?.avoid_cutoff !== 0 && x.end_cut_off && x.end_cut_off !== "00:00") {
+      const now = new Date();
+      const clock = new Intl.DateTimeFormat("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"Asia/Jakarta"}).format(now);
+      if (clock >= x.end_cut_off) reasons.push("Lewat cut-off");
+    }
+    if (zone && !zone.patterns.every(p=>x.description.toLowerCase().includes(p.toLowerCase()))) reasons.push("Zona tidak cocok");
+    const peers = rows.map(s=>s.price).filter(n=>n>0), low=Math.min(...peers), high=Math.max(...peers);
+    const price = high===low ? 100 : 100*(high-x.price)/(high-low);
+    const connection = /ip/i.test(x.connection) ? 100 : /h2h/i.test(x.connection) ? 70 : 50;
+    const sla = /h\+?0/i.test(x.sla) ? 100 : /h\+?1/i.test(x.sla) ? 60 : 30;
+    const stock = x.unlimited_stock ? 100 : x.stock > 0 ? 70 : 0;
+    const w=config.weights;
+    const score = Math.round(price*w.price/100+connection*w.connection/100+sla*w.sla/100+stock*w.stock/100+(x.rating||0)*3+(preferred.has(name)?20:0));
+    return { ...x, eligible:!reasons.length, reasons, score };
+  }).sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score||a.price-b.price);
+}
+async function discover(env) {
+  const res = await remote(env,"/buyer-area");
+  const html = (await res.text()).slice(0,750000);
+  const scripts = [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map(x=>x[1]).filter(x=>!x.startsWith("//")).slice(0,12);
+  const found = new Set();
+  for (const src of scripts) {
+    let target;
+    try { target = new URL(src,"https://member.digiflazz.com"); hostUrl(target.toString()); } catch { continue; }
+    try {
+      const r = await remote(env,target.pathname+target.search);
+      if (!/javascript|text\/plain/.test(r.headers.get("content-type")||"")) continue;
+      const text = (await r.text()).slice(0,1500000);
+      for (const m of text.matchAll(/\/api\/v1\/buyer\/[a-zA-Z0-9_/$?{}.:+-]+/g)) found.add(m[0].slice(0,200));
+    } catch {}
+  }
+  const paths = [...found].slice(0,300);
+  for (const path of paths) await env.DB.prepare("INSERT INTO api_discovery(route,source_url,context) VALUES(?,?,?) ON CONFLICT(route) DO NOTHING").bind(path,"https://member.digiflazz.com/buyer-area","script reference").run();
+  await log(env,"INFO","discovery",paths.length+" jalur API ditemukan; belum ada aksi write yang diaktifkan.");
+  return {ok:true,count:paths.length,paths};
+}
+async function api(req, env, url) {
+  const path=url.pathname, method=req.method;
+  try {
+    if (method==="GET" && path==="/api/health") {
+      await env.DB.prepare("SELECT 1").first();
+      return reply({ok:true,service:"digiflazz-tools"});
+    }
+    if (!await authorize(req,env)) return failure("Akses pribadi diperlukan.",401);
+    if (method!=="GET" && method!=="HEAD" && req.headers.get("origin")!==url.origin) return failure("Asal permintaan tidak sah.",403);
+    if (method==="GET" && path==="/api/bootstrap") {
+      const [c, cfg, count, sellerCount, last, events]=await Promise.all([
+        conn(env),settings(env),
+        env.DB.prepare("SELECT count(*) total,sum(CASE WHEN seller_name='' OR seller_active=0 OR (max_price>0 AND price>max_price) OR (stock=0 AND unlimited_stock=0) THEN 1 ELSE 0 END) issues FROM products").first(),
+        env.DB.prepare("SELECT count(*) total FROM sellers").first(),
+        env.DB.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").first(),
+        env.DB.prepare("SELECT id,level,kind,sku,message,created_at FROM events ORDER BY id DESC LIMIT 8").all()
+      ]);
+      return reply({ok:true,connection:{connected:!!c,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at},settings:cfg,counts:{products:count.total,issues:count.issues||0,sellers:sellerCount.total},lastScan:last,events:events.results,liveSwitchAvailable:false});
+    }
+    if (method==="GET" && path==="/api/connection/status") {
+      const c=await conn(env);
+      return reply({ok:true,connected:!!c,sourceHost:c?.source_host,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at,updatedAt:c?.updated_at});
+    }
+    if (method==="POST" && path==="/api/connection") {
+      if (!env.SESSION_ENCRYPTION_KEY) return failure("Secret enkripsi belum terpasang.",503);
+      const body=await getJson(req), data=parseCurl(body.curl), sealed=await seal(data,env.SESSION_ENCRYPTION_KEY);
+      await env.DB.prepare("INSERT INTO digiflazz_connections(id,encrypted_payload,iv,source_host) VALUES(1,?,?,'member.digiflazz.com') ON CONFLICT(id) DO UPDATE SET encrypted_payload=excluded.encrypted_payload,iv=excluded.iv,last_test_status=NULL,last_test_at=NULL,updated_at=CURRENT_TIMESTAMP").bind(sealed.encrypted,sealed.iv).run();
+      await log(env,"INFO","connection","Sesi Digiflazz diperbarui.");
+      return reply({ok:true,saved:true});
+    }
+    if (method==="POST" && path==="/api/connection/test") {
+      const c=await conn(env); if (!c) return failure("Belum ada sesi.",404);
+      const data=await unseal(c,env.SESSION_ENCRYPTION_KEY);
+      const target=hostUrl(data.url);
+      const res=await fetch(target,{method:data.method,headers:data.headers,redirect:"manual",signal:AbortSignal.timeout(20000)});
+      const good=res.status>=200&&res.status<300;
+      await env.DB.prepare("UPDATE digiflazz_connections SET last_test_status=?,last_test_at=CURRENT_TIMESTAMP WHERE id=1").bind(res.status).run();
+      return reply({ok:true,connected:good,httpStatus:res.status});
+    }
+    if (method==="DELETE" && path==="/api/connection") {
+      await env.DB.prepare("DELETE FROM digiflazz_connections WHERE id=1").run();
+      return reply({ok:true,disconnected:true});
+    }
+    if (method==="POST" && path==="/api/scan") return reply(await scan(env));
+    if (method==="POST" && path==="/api/discover") return reply(await discover(env));
+    if (method==="GET" && path==="/api/discover") {
+      const rows=await env.DB.prepare("SELECT route FROM api_discovery ORDER BY route LIMIT 300").all();
+      return reply({ok:true,routes:rows.results});
+    }
+    if (method==="GET" && path==="/api/products") {
+      const page=bounded(url.searchParams.get("page"),1,100000,1);
+      const q="%"+str(url.searchParams.get("q")).slice(0,80)+"%";
+      const status=str(url.searchParams.get("status"));
+      const where="WHERE (p.sku LIKE ? OR p.name LIKE ? OR p.brand LIKE ?)"+(status==="issues"?" AND (p.seller_name='' OR p.seller_active=0 OR (p.max_price>0 AND p.price>p.max_price) OR (p.stock=0 AND p.unlimited_stock=0))":status==="locked"?" AND p.sku IN (SELECT buyer_sku_code FROM product_locks)":"");
+      const args=[q,q,q];
+      const [n,rows]=await Promise.all([
+        env.DB.prepare("SELECT count(*) total FROM products p "+where).bind(...args).first(),
+        env.DB.prepare("SELECT p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.last_seen,l.buyer_sku_code IS NOT NULL AS locked FROM products p LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku "+where+" ORDER BY p.last_seen DESC,p.name LIMIT 50 OFFSET ?").bind(...args,(page-1)*50).all()
+      ]);
+      return reply({ok:true,total:n.total,page,products:rows.results});
+    }
+    const opt=path.match(/^\/api\/products\/([^/]+)\/options$/);
+    if (method==="GET" && opt) {
+      const sku=decodeURIComponent(opt[1]);
+      const [p,o,preferences,rule,zone,cfg]=await Promise.all([
+        env.DB.prepare("SELECT p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.end_cut_off,l.buyer_sku_code IS NOT NULL AS locked FROM products p LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku WHERE p.sku=?").bind(sku).first(),
+        env.DB.prepare("SELECT sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description FROM seller_options WHERE sku=?").bind(sku).all(),
+        env.DB.prepare("SELECT seller_name,mode FROM seller_preferences").all(),
+        env.DB.prepare("SELECT * FROM seller_rules WHERE is_active=1 AND (scope_type='global' OR (scope_type='product' AND scope_value=?) OR (scope_type='brand' AND scope_value=(SELECT brand FROM products WHERE sku=?)) OR (scope_type='category' AND scope_value=(SELECT category FROM products WHERE sku=?)) OR (scope_type='type' AND scope_value=(SELECT product_type FROM products WHERE sku=?))) ORDER BY CASE scope_type WHEN 'product' THEN 0 WHEN 'type' THEN 1 WHEN 'brand' THEN 2 WHEN 'category' THEN 3 ELSE 4 END,id DESC LIMIT 1").bind(sku,sku,sku,sku).first(),
+        env.DB.prepare("SELECT z.patterns FROM zones z JOIN zone_assignments a ON a.zone_id=z.id WHERE a.sku=?").bind(sku).first(),
+        settings(env)
+      ]);
+      if(!p)return failure("Produk tidak ditemukan.",404);
+      return reply({ok:true,product:p,options:rank(p,o.results,preferences.results,rule,cfg,zone?{patterns:JSON.parse(zone.patterns)}:null),connectorReady:false});
+    }
+    const lock=path.match(/^\/api\/products\/([^/]+)\/lock$/);
+    if(method==="POST"&&lock) {
+      const sku=decodeURIComponent(lock[1]),body=await getJson(req);
+      if(bool(body.locked)) await env.DB.prepare("INSERT INTO product_locks(buyer_sku_code,reason) VALUES(?,?) ON CONFLICT(buyer_sku_code) DO UPDATE SET reason=excluded.reason").bind(sku,str(body.reason)).run();
+      else await env.DB.prepare("DELETE FROM product_locks WHERE buyer_sku_code=?").bind(sku).run();
+      return reply({ok:true,locked:bool(body.locked)});
+    }
+    if(method==="POST"&&/^\/api\/products\/[^/]+\/switch$/.test(path)) return failure("Endpoint perubahan seller Digiflazz belum terverifikasi. Tidak ada produk yang diubah.",503);
+    if(method==="GET"&&path==="/api/sellers") {
+      const rows=await env.DB.prepare("SELECT s.seller_id,s.name,s.rating,s.review_count,s.product_count,s.invoice,p.mode FROM sellers s LEFT JOIN seller_preferences p ON p.seller_name=s.name ORDER BY s.rating DESC,s.name LIMIT 1000").all();
+      return reply({ok:true,sellers:rows.results});
+    }
+    const pref=path.match(/^\/api\/sellers\/([^/]+)\/preference$/);
+    if(method==="POST"&&pref) {
+      const body=await getJson(req), name=decodeURIComponent(pref[1]);
+      if(!["preferred","blocked","none"].includes(body.mode))throw Error("Pilihan tidak valid.");
+      await env.DB.prepare("DELETE FROM seller_preferences WHERE seller_name=?").bind(name).run();
+      if(body.mode!=="none") await env.DB.prepare("INSERT INTO seller_preferences(seller_name,mode) VALUES(?,?)").bind(name,body.mode).run();
+      return reply({ok:true,mode:body.mode});
+    }
+    if(method==="GET"&&path==="/api/rules") {
+      const rows=await env.DB.prepare("SELECT * FROM seller_rules ORDER BY id DESC").all();
+      return reply({ok:true,rules:rows.results});
+    }
+    if(method==="POST"&&path==="/api/rules") {
+      const b=await getJson(req);
+      if(!["global","category","brand","type","product"].includes(b.scope_type))throw Error("Cakupan tidak valid.");
+      if(b.scope_type!=="global"&&!str(b.scope_value))throw Error("Target aturan wajib diisi.");
+      const r=await env.DB.prepare("INSERT INTO seller_rules(scope_type,scope_value,min_rating,max_price,require_stock,avoid_cutoff) VALUES(?,?,?,?,?,?)").bind(b.scope_type,str(b.scope_value),b.min_rating==null?null:bounded(b.min_rating,0,5),b.max_price==null?null:bounded(b.max_price,0,1000000000),bool(b.require_stock)?1:0,bool(b.avoid_cutoff)?1:0).run();
+      return reply({ok:true,id:r.meta.last_row_id});
+    }
+    const rule=path.match(/^\/api\/rules\/(\d+)$/);
+    if(method==="DELETE"&&rule) {
+      await env.DB.prepare("DELETE FROM seller_rules WHERE id=?").bind(Number(rule[1])).run();
+      return reply({ok:true});
+    }
+    if(method==="GET"&&path==="/api/zones") {
+      const rows=await env.DB.prepare("SELECT z.*,count(a.sku) assignments FROM zones z LEFT JOIN zone_assignments a ON a.zone_id=z.id GROUP BY z.id ORDER BY z.name").all();
+      return reply({ok:true,zones:rows.results});
+    }
+    if(method==="POST"&&path==="/api/zones") {
+      const b=await getJson(req),patterns=str(b.patterns).split(",").map(x=>x.trim()).filter(Boolean);
+      if(!str(b.name)||!str(b.product_id)||!patterns.length)throw Error("Nama, product ID, dan pola zona wajib diisi.");
+      const r=await env.DB.prepare("INSERT INTO zones(name,product_id,patterns) VALUES(?,?,?)").bind(str(b.name),str(b.product_id),JSON.stringify(patterns)).run();
+      return reply({ok:true,id:r.meta.last_row_id});
+    }
+    const zone=path.match(/^\/api\/zones\/(\d+)$/);
+    if(method==="DELETE"&&zone) {
+      await env.DB.prepare("DELETE FROM zones WHERE id=?").bind(Number(zone[1])).run();
+      return reply({ok:true});
+    }
+    if(method==="POST"&&path==="/api/zones/assign") {
+      const b=await getJson(req);
+      if(!str(b.sku))throw Error("SKU wajib diisi.");
+      if(b.zone_id) await env.DB.prepare("INSERT INTO zone_assignments(sku,zone_id) VALUES(?,?) ON CONFLICT(sku) DO UPDATE SET zone_id=excluded.zone_id").bind(str(b.sku),Number(b.zone_id)).run();
+      else await env.DB.prepare("DELETE FROM zone_assignments WHERE sku=?").bind(str(b.sku)).run();
+      return reply({ok:true});
+    }
+    if(method==="GET"&&path==="/api/events") {
+      const rows=await env.DB.prepare("SELECT id,level,kind,sku,message,created_at FROM events ORDER BY id DESC LIMIT 200").all();
+      return reply({ok:true,events:rows.results});
+    }
+    if(method==="GET"&&path==="/api/history") {
+      const [prices,switches,runs]=await Promise.all([
+        env.DB.prepare("SELECT buyer_sku_code,seller_name,price,captured_at FROM price_history ORDER BY id DESC LIMIT 100").all(),
+        env.DB.prepare("SELECT buyer_sku_code,from_seller,to_seller,reason,status,created_at FROM switch_history ORDER BY id DESC LIMIT 100").all(),
+        env.DB.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 50").all()
+      ]);
+      return reply({ok:true,prices:prices.results,switches:switches.results,runs:runs.results});
+    }
+    if(method==="GET"&&path==="/api/settings")return reply({ok:true,settings:await settings(env)});
+    if(method==="POST"&&path==="/api/settings") {
+      const current=await settings(env),next=validateSettings(await getJson(req),current);
+      const operations=Object.entries(next).map(([k,v])=>env.DB.prepare("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP").bind(k,JSON.stringify(v)));
+      await env.DB.batch(operations);
+      return reply({ok:true,settings:next});
+    }
+    if(method==="GET"&&path==="/api/random-code") {
+      const bytes=crypto.getRandomValues(new Uint8Array(5));
+      return reply({ok:true,code:"L"+[...bytes].map(n=>"0123456789ABCDEFGHJKMNPQRSTVWXYZ"[n%32]).join("")});
+    }
+    return failure("Halaman API tidak ditemukan.",404);
+  } catch(error) {
+    return failure(error, /sesi|Digiflazz mengembalikan|format katalog|tidak mengembalikan/i.test(error.message)?502:400);
+  }
+}
+export { rank, normalizeProduct, validateSettings };
+export default {
+  async fetch(req,env) {
+    const url=new URL(req.url);
+    if(url.pathname.startsWith("/api/")) return api(req,env,url);
+    if(!await authorize(req,env)) return failure("Akses pribadi diperlukan.",401);
+    if(url.pathname!=="/")return new Response(null,{status:404});
+    return new Response(HTML,{headers:{...secureHeaders,"content-type":"text/html; charset=utf-8","content-security-policy":"default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"}});
+  },
+  async scheduled(event,env) {
+    try {
+      const cfg=await settings(env);
+      const last=await env.DB.prepare("SELECT finished_at FROM scan_runs WHERE status='success' ORDER BY id DESC LIMIT 1").first();
+      const due=!last || Date.now()-Date.parse(last.finished_at.replace(" ","T")+"Z")>=cfg.scanIntervalMinutes*60000;
+      if(cfg.scanEnabled&&due) await scan(env,"cron");
+      const known=await env.DB.prepare("SELECT count(*) total FROM api_discovery").first();
+      const previous=await env.DB.prepare("SELECT value FROM app_settings WHERE key='discovery_last_attempt'").first();
+      if(known.total===0&&await conn(env)&&(!previous||Date.now()-Date.parse(previous.value)>86400000)) {
+        await env.DB.prepare("INSERT INTO app_settings(key,value) VALUES('discovery_last_attempt',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(new Date().toISOString()).run();
+        await discover(env);
+      }
+    } catch(error) { try { await log(env,"ERROR","cron",error.message); } catch {} }
+  }
+};
