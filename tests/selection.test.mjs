@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8").replace("const HTML = __HTML__;", "const HTML = '';");
-const { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow } = await import("data:text/javascript," + encodeURIComponent(source));
+const { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays } = await import("data:text/javascript," + encodeURIComponent(source));
 
 test("seller filtering rejects blocked, expensive, and out of stock candidates", () => {
   const product = { max_price: 11000 };
@@ -107,15 +107,25 @@ test("catalog metadata resolves Digiflazz category, brand, and type IDs to names
 });
 
 
-test("auto-switch always ranks the cheapest eligible seller first even when a pricier seller has a higher quality score", () => {
+test("auto-switch priority is rating 4-5, then SLA, then cheapest price", () => {
   const product = { max_price: 0 };
   const rows = [
-    { seller_id:"cheap", seller_name:"Cheap", price:10000, rating:4.1, review_count:"100", stock:10, unlimited_stock:0, connection:"HTTP", sla:"H+1", description:"", seller_status:1 },
-    { seller_id:"premium", seller_name:"Premium", price:11000, rating:5, review_count:"5000", stock:999, unlimited_stock:1, connection:"IP", sla:"H+0", description:"", seller_status:1 }
+    { seller_id:"bad-rating", seller_name:"Bad Rating", price:8000, rating:3.99, review_count:"5000", stock:999, unlimited_stock:1, connection:"IP", sla:"H+0", description:"", seller_status:1 },
+    { seller_id:"cheap-h1", seller_name:"Cheap H1", price:9000, rating:4.9, review_count:"100", stock:10, unlimited_stock:0, connection:"IP", sla:"SLA H+1, maks komplain H+7", description:"", seller_status:1 },
+    { seller_id:"h0-expensive", seller_name:"H0 Expensive", price:11000, rating:4.1, review_count:"100", stock:10, unlimited_stock:0, connection:"api", sla:"SLA H+0, maks komplain H+7", description:"", seller_status:1 },
+    { seller_id:"h0-cheapest", seller_name:"H0 Cheapest", price:10000, rating:4.0, review_count:"100", stock:10, unlimited_stock:0, connection:"unknown", sla:"Max penyelesaian komplain H+0, max penerimaan komplain H+7", description:"", seller_status:1 }
   ];
-  const config = { minRating:4, minReviews:0, priceCap:0, weights:{price:40,connection:30,sla:20,stock:10} };
-  const result = rank(product, rows, [{seller_name:"Premium",mode:"preferred"}], null, config, null);
-  assert.equal(result[0].seller_id,"cheap");
-  assert.equal(result[0].price,10000);
-  assert.ok(result[1].score > result[0].score);
+  const config = { minRating:0, minReviews:0, priceCap:0, weights:{price:0,connection:100,sla:0,stock:0} };
+  const result = rank(product, rows, [{seller_name:"H0 Expensive",mode:"preferred"}], null, config, null);
+  assert.equal(result.find(x=>x.seller_id==="bad-rating").eligible,false);
+  assert.equal(result[0].seller_id,"h0-cheapest");
+  assert.equal(result[0].sla_days,0);
+  assert.equal(result[1].seller_id,"h0-expensive");
+  assert.equal(result[2].seller_id,"cheap-h1");
+});
+
+test("SLA parser prefers resolution SLA and ignores complaint acceptance horizon",()=>{
+  assert.equal(slaDays("SLA H+0, maks penerimaan komplain H+7"),0);
+  assert.equal(slaDays("Max penyelesaian komplain H+1, Max terima komplen H+7"),1);
+  assert.equal(slaDays("SLA H+2, maks penerimaan komplain H+7"),2);
 });

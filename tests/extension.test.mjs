@@ -6,9 +6,9 @@ import { runInNewContext } from "node:vm";
 const source=readFileSync(new URL("../extension/digi-select.user.js",import.meta.url),"utf8");
 const module={exports:{}};
 runInNewContext(source,{module,setTimeout});
-const {chooseSeller,patch,serviceCode,maxPriceForSeller}=module.exports;
+const {chooseSeller,patch,serviceCode,maxPriceForSeller,slaDays}=module.exports;
 const product={id:123,seller_sku_id:"current",max_price:12000};
-const candidate=(id,seller,price,rating=4.8,review="40+")=>({id,seller,price,reviewAvg:rating,rating_qty:review,stock:10,unlimited_stock:0,status_sellerSku:1,connectionType:"ip",seller_details:{sla:"H+0"}});
+const candidate=(id,seller,price,rating=4.8,review="40+",sla="H+0",connectionType="ip")=>({id,seller,price,reviewAvg:rating,rating_qty:review,stock:10,unlimited_stock:0,status_sellerSku:1,connectionType,seller_details:{sla}});
 
 test("picks an eligible seller directly for the selected Digiflazz product",()=>{
   const options=[candidate("current","Existing",8900),candidate("high","High",13000),candidate("low","Low",9900),candidate("bad","Bad",9800,3.0)];
@@ -27,9 +27,27 @@ test("never selects an expensive or out of stock seller",()=>{
   assert.equal(chooseSeller([candidate("over","Over",11000)],product,{minRating:4,priceCap:10000}),null);
 });
 
-test("preferred seller bonus is applied after price and quality checks",()=>{
-  const options=[candidate("cheap","Cheap",10000),candidate("preferred","Preferred",10400)];
-  assert.equal(chooseSeller(options,product,{minRating:4,preferred:"Preferred"}).id,"preferred");
+test("seller priority is rating 4-5, then SLA, then cheapest price",()=>{
+  const options=[
+    candidate("bad","Bad",8000,3.99,"1000+","H+0","ip"),
+    candidate("cheap-h1","Cheap H1",9000,4.9,"100+","SLA H+1, maks komplain H+7","ip"),
+    candidate("h0-expensive","H0 Expensive",11000,4.2,"100+","SLA H+0, maks komplain H+7","api"),
+    candidate("h0-cheap","H0 Cheap",10000,4.0,"100+","Max penyelesaian komplain H+0, max penerimaan komplain H+7","unknown")
+  ];
+  assert.equal(chooseSeller(options,product,{minRating:0,preferred:"H0 Expensive"}).id,"h0-cheap");
+});
+
+test("connection type never outranks SLA or price",()=>{
+  const options=[
+    candidate("api","API",10000,4.5,"100+","H+0","api"),
+    candidate("ip","IP",10010,4.5,"100+","H+0","ip")
+  ];
+  assert.equal(chooseSeller(options,product,{minRating:4}).id,"api");
+});
+
+test("userscript SLA parser uses resolution SLA, not complaint horizon",()=>{
+  assert.equal(slaDays("SLA H+0, maks penerimaan komplain H+7"),0);
+  assert.equal(slaDays("Max penyelesaian komplen H+1, Max terima komplen H+7"),1);
 });
 
 test("codes use game initials and denomination without random characters",()=>{
