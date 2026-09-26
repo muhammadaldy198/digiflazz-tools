@@ -279,6 +279,13 @@ async function scan(env, reason = "manual") {
     throw error;
   }
 }
+function inCutoffWindow(start,end,now=new Date()) {
+  const clean=v=>/^([01]\d|2[0-3]):[0-5]\d$/.test(str(v))?str(v):null;
+  const a=clean(start),b=clean(end);
+  if(!a||!b||a===b) return false;
+  const clock=new Intl.DateTimeFormat("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"Asia/Jakarta"}).format(now);
+  return a<b ? clock>=a&&clock<b : clock>=a||clock<b;
+}
 function rank(product, rows, prefs, rule, config, zone) {
   const blocked = new Set(prefs.filter(p=>p.mode==="blocked").map(p=>p.seller_name.toLowerCase()));
   const preferred = new Set(prefs.filter(p=>p.mode==="preferred").map(p=>p.seller_name.toLowerCase()));
@@ -296,11 +303,7 @@ function rank(product, rows, prefs, rule, config, zone) {
     const count = /^\d+/.exec(String(x.review_count || ""));
     if (config.minReviews > 0 && (!count || String(x.review_count).startsWith("<") || Number(count[0]) < config.minReviews)) reasons.push("Ulasan kurang atau tidak tersedia");
     if (rule?.require_stock !== 0 && x.stock != null && !x.unlimited_stock && !(x.stock > 0)) reasons.push("Stok habis");
-    if (rule?.avoid_cutoff !== 0 && x.end_cut_off && x.end_cut_off !== "00:00") {
-      const now = new Date();
-      const clock = new Intl.DateTimeFormat("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"Asia/Jakarta"}).format(now);
-      if (clock >= x.end_cut_off) reasons.push("Lewat cut-off");
-    }
+    if (rule?.avoid_cutoff !== 0 && inCutoffWindow(x.start_cut_off,x.end_cut_off)) reasons.push("Sedang cut-off");
     if (zone && !zone.patterns.every(p=>String(x.description||"").toLowerCase().includes(p.toLowerCase()))) reasons.push("Zona tidak cocok");
     const peers = rows.map(s=>s.price).filter(n=>n>0), low=Math.min(...peers);
     const price = x.price>0 && Number.isFinite(low) ? 100*low/x.price : 0;
@@ -332,7 +335,7 @@ async function rankedOptions(env, sku, refresh = true) {
   if (refresh) await refreshOptions(env, sku, entry.product_id);
   const [product, options, preferences, rule, zone, config] = await Promise.all([
     env.DB.prepare("SELECT p.*,l.buyer_sku_code IS NOT NULL AS locked FROM products p LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku WHERE p.sku=?").bind(sku).first(),
-    env.DB.prepare("SELECT sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description,json_extract(raw,'$.rating_qty') AS review_count,json_extract(raw,'$.status_sellerSku') AS seller_status,json_extract(raw,'$.end_cut_off') AS end_cut_off,raw FROM seller_options WHERE sku=?").bind(sku).all(),
+    env.DB.prepare("SELECT sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description,json_extract(raw,'$.rating_qty') AS review_count,json_extract(raw,'$.status_sellerSku') AS seller_status,json_extract(raw,'$.start_cut_off') AS start_cut_off,json_extract(raw,'$.end_cut_off') AS end_cut_off,raw FROM seller_options WHERE sku=?").bind(sku).all(),
     env.DB.prepare("SELECT seller_name,mode FROM seller_preferences").all(),
     env.DB.prepare("SELECT * FROM seller_rules WHERE is_active=1 AND (scope_type='global' OR (scope_type='product' AND scope_value=?) OR (scope_type='brand' AND scope_value=(SELECT brand FROM products WHERE sku=?)) OR (scope_type='category' AND scope_value=(SELECT category FROM products WHERE sku=?)) OR (scope_type='type' AND scope_value=(SELECT product_type FROM products WHERE sku=?))) ORDER BY CASE scope_type WHEN 'product' THEN 0 WHEN 'type' THEN 1 WHEN 'brand' THEN 2 WHEN 'category' THEN 3 ELSE 4 END,id DESC LIMIT 1").bind(sku,sku,sku,sku).first(),
     env.DB.prepare("SELECT z.patterns FROM zones z JOIN zone_assignments a ON a.zone_id=z.id WHERE a.sku=?").bind(sku).first(),settings(env)
@@ -688,7 +691,7 @@ async function api(req, env, url) {
     return failure(error, /sesi|Digiflazz mengembalikan|format katalog|tidak mengembalikan/i.test(error.message)?502:400);
   }
 }
-export { rank, normalizeProduct, validateSettings, changedProduct, serviceCode };
+export { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow };
 export default {
   async fetch(req,env) {
     const url=new URL(req.url);
