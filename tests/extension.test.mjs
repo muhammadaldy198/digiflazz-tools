@@ -66,6 +66,14 @@ test("hooks Digiflazz Vue choice after loading the selected product's sellers",a
 test("Firefox Android userscript uses forced content-context injection and visible panel",()=>{
   assert.match(source,/\/\/ @inject-into\s+content/);
   assert.match(source,/\/\/ @run-at\s+document-end/);
-  assert.match(source,/Auto Seller v1\.3 aktif/);
+  assert.match(source,/Auto Seller v1\.4 aktif/);
   assert.match(source,/wrappedJSObject/);
+});
+
+
+test("batch SKU UI replaces one-by-one generator",()=>{
+  assert.match(source,/Buat SKU otomatis untuk semua produk/);
+  assert.match(source,/Isi semua SKU di halaman/);
+  assert.doesNotMatch(source,/id="code-game"/);
+  assert.doesNotMatch(source,/id="code-product"/);
 });
