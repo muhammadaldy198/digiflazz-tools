@@ -4,7 +4,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const DEFAULTS = {
   scanEnabled: false, dryRun: true, autoSwitch: false, scanIntervalMinutes: 5,
-  minRating: 0, minReviews: 0, priceCap: 0, preserveMaxPrice: true,
+  minRating: 4, minReviews: 0, priceCap: 0, preserveMaxPrice: true,
   saveMode: "manual", autoFillMaxPrice: true, proactiveScan: false,
   reoptimizeHours: 0, minSavingsPercent: 5, cooldownHours: 24, autoSwitchBatchSize: 5,
   weights: { price: 40, connection: 30, sla: 20, stock: 10 },
@@ -230,7 +230,7 @@ function validateSettings(input, current) {
       if(!Number.isSafeInteger(Number(value))||Number(value)<0||Number(value)>1000000000)throw Error("Tambahan max price harus angka rupiah bulat antara 0 dan 1 miliar.");
       next[key]=Number(value);
     } else if (["minRating","minReviews","priceCap","scanIntervalMinutes","reoptimizeHours","minSavingsPercent","cooldownHours","autoSwitchBatchSize"].includes(key)) {
-      const limits = {minRating:[0,5],minReviews:[0,100000],priceCap:[0,1000000000],scanIntervalMinutes:[5,1440],reoptimizeHours:[0,720],minSavingsPercent:[0,100],cooldownHours:[1,720],autoSwitchBatchSize:[1,10]};
+      const limits = {minRating:[4,5],minReviews:[0,100000],priceCap:[0,1000000000],scanIntervalMinutes:[5,1440],reoptimizeHours:[0,720],minSavingsPercent:[0,100],cooldownHours:[1,720],autoSwitchBatchSize:[1,10]};
       next[key] = bounded(value, ...limits[key], current[key]);
     } else if (key === "saveMode" && ["manual","auto"].includes(value)) next[key] = value;
     else if (key === "weights") {
@@ -328,13 +328,35 @@ function inCutoffWindow(start,end,now=new Date()) {
   const clock=new Intl.DateTimeFormat("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"Asia/Jakarta"}).format(now);
   return a<b ? clock>=a&&clock<b : clock>=a||clock<b;
 }
+function slaDays(value) {
+  const text=str(value).replace(/\s+/g," ").trim();
+  if(!text) return 999;
+  const preferredPatterns=[
+    /(?:SLA|penyelesaian(?:\s+(?:komplain|komplen|masalah))?|rekon|validasi|clear|cek)\D{0,48}?H\s*\+\s*(\d{1,2})/ig
+  ];
+  for(const pattern of preferredPatterns) {
+    const hits=[...text.matchAll(pattern)].map(m=>Number(m[1])).filter(Number.isFinite);
+    if(hits.length) return Math.min(...hits);
+  }
+  const hits=[];
+  const re=/H\s*\+\s*(\d{1,2})/ig;
+  let match;
+  while((match=re.exec(text))) {
+    const before=text.slice(Math.max(0,match.index-55),match.index).toLowerCase();
+    const acceptance=/(?:terima|penerima|penerimaan|max(?:imal)?\s+komplain|maks(?:imal)?\s+komplain)/i.test(before);
+    const service=/(?:sla|penyelesaian|rekon|validasi|clear|cek)/i.test(before);
+    if(!acceptance || service) hits.push(Number(match[1]));
+  }
+  return hits.length?Math.min(...hits):999;
+}
 function rank(product, rows, prefs, rule, config, zone) {
   const blocked = new Set(prefs.filter(p=>p.mode==="blocked").map(p=>p.seller_name.toLowerCase()));
   const preferred = new Set(prefs.filter(p=>p.mode==="preferred").map(p=>p.seller_name.toLowerCase()));
   const hasHealthState = Object.prototype.hasOwnProperty.call(product,"seller_name") || Object.prototype.hasOwnProperty.call(product,"seller_active") || Object.prototype.hasOwnProperty.call(product,"stock");
   const unhealthy = hasHealthState && (!product.seller_name || product.seller_active === 0 || (product.max_price > 0 && product.price > product.max_price) || (!product.unlimited_stock && product.stock === 0));
   const max = Math.min(...[rule?.max_price, unhealthy ? 0 : product.max_price, config.priceCap].filter(x=>Number(x)>0).map(Number), Infinity);
-  const minRating = rule?.min_rating ?? config.minRating;
+  const configuredMinRating=Number(rule?.min_rating ?? config.minRating ?? 4);
+  const minRating=Math.max(4,Math.min(5,Number.isFinite(configuredMinRating)?configuredMinRating:4));
   return rows.map(x => {
     const reasons = [];
     const name = x.seller_name.toLowerCase();
@@ -347,17 +369,14 @@ function rank(product, rows, prefs, rule, config, zone) {
     if (rule?.require_stock !== 0 && x.stock != null && !x.unlimited_stock && !(x.stock > 0)) reasons.push("Stok habis");
     if (rule?.avoid_cutoff !== 0 && inCutoffWindow(x.start_cut_off,x.end_cut_off)) reasons.push("Sedang cut-off");
     if (zone && !zone.patterns.every(p=>String(x.description||"").toLowerCase().includes(p.toLowerCase()))) reasons.push("Zona tidak cocok");
-    const peers = rows.map(s=>s.price).filter(n=>n>0), low=Math.min(...peers);
-    const price = x.price>0 && Number.isFinite(low) ? 100*low/x.price : 0;
-    const connection = /ip/i.test(x.connection) ? 100 : /h2h/i.test(x.connection) ? 70 : 50;
-    const sla = /h\+?0/i.test(x.sla) ? 100 : /h\+?1/i.test(x.sla) ? 60 : 30;
-    const stock = x.unlimited_stock || x.stock > 0 ? 100 : 0;
-    const w=config.weights;
-    const score = Math.round(price*w.price/100+connection*w.connection/100+sla*w.sla/100+stock*w.stock/100+(x.rating||0)*3+(preferred.has(name)?20:0));
-    return { ...x, eligible:!reasons.length, reasons, score };
+    const sla_days=slaDays(x.sla);
+    return { ...x, eligible:!reasons.length, reasons, sla_days, preferred:preferred.has(name) };
   }).sort((a,b)=>
     Number(b.eligible)-Number(a.eligible) ||
-    (a.eligible && b.eligible ? (Number(a.price)-Number(b.price) || b.score-a.score) : (Number(a.price)-Number(b.price) || b.score-a.score))
+    Number(a.sla_days)-Number(b.sla_days) ||
+    Number(a.price)-Number(b.price) ||
+    Number(b.rating||0)-Number(a.rating||0) ||
+    Number(b.preferred)-Number(a.preferred)
   );
 }
 async function refreshOptions(env, sku, productId) {
@@ -745,7 +764,7 @@ async function api(req, env, url) {
     return failure(error, /sesi|Digiflazz mengembalikan|format katalog|tidak mengembalikan/i.test(error.message)?502:400);
   }
 }
-export { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow };
+export { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays };
 export default {
   async fetch(req,env) {
     const url=new URL(req.url);
