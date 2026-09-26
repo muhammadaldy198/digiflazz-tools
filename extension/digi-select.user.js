@@ -1,12 +1,15 @@
 // ==UserScript==
 // @name         Digi Tools — Auto Select Seller
 // @namespace    https://tools.lfamiliastore.my.id/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Pilih seller langsung di halaman produk Digiflazz. Sesi tetap di browser.
 // @match        https://member.digiflazz.com/*
-// @run-at       document-start
-// @inject-into  page
+// @run-at       document-end
+// @inject-into  auto
 // @grant        none
+// @noframes
+// @downloadURL  https://raw.githubusercontent.com/muhammadaldy198/digiflazz-tools/main/extension/digi-select.user.js
+// @updateURL    https://raw.githubusercontent.com/muhammadaldy198/digiflazz-tools/main/extension/digi-select.user.js
 // ==/UserScript==
 
 (() => {
@@ -92,19 +95,42 @@
       }
     } catch {update("Pemilihan otomatis gagal; pilih seller secara manual.")}
   }
+  function unwrap(value) {
+    if(!value)return value;
+    try { return value.wrappedJSObject || value; } catch { return value; }
+  }
+  function expose(fn,target) {
+    if(typeof exportFunction==="function") {
+      try { return exportFunction(fn,target); } catch {}
+    }
+    return fn;
+  }
+  function vueOf(element) {
+    if(!element)return null;
+    try {
+      const raw=unwrap(element);
+      return unwrap(raw?.__vue__ || element.__vue__) || null;
+    } catch { return null; }
+  }
   function patch(vm) {
-    if(!vm || vm.__digiToolsPatched || typeof vm.fetchSellers!=="function" || typeof vm.selectSeller!=="function" || !Array.isArray(vm.sellers))return;
+    vm=unwrap(vm);
+    let sellers;
+    try { sellers=unwrap(vm?.sellers); } catch { sellers=null; }
+    if(!vm || vm.__digiToolsPatched || typeof vm.fetchSellers!=="function" || typeof vm.selectSeller!=="function" || !Array.isArray(sellers))return;
     vm.__digiToolsPatched=true;
     const original=vm.fetchSellers;
-    vm.fetchSellers=function(product) {
-      const result=original.apply(this,arguments);
+    const replacement=function(product) {
+      const self=unwrap(this)||vm, rawProduct=unwrap(product);
+      const result=original.apply(self,arguments);
       if(!settings.enabled)return result;
-      update("Memeriksa seller untuk "+str(product?.code||product?.product||"produk")+"…");
+      update("Memeriksa seller untuk "+str(rawProduct?.code||rawProduct?.product||"produk")+"…");
       let attempts=0;
       const wait=()=>{
-        if(!settings.enabled || vm._isDestroyed)return;
-        if(vm.currentEditted===product && vm.dialogSeller && !vm.fetchingSellers && Array.isArray(vm.sellers)) {
-          handle(vm,product);return;
+        if(!settings.enabled || self._isDestroyed)return;
+        let current,list;
+        try { current=unwrap(self.currentEditted);list=unwrap(self.sellers); } catch {}
+        if(current===rawProduct && self.dialogSeller && !self.fetchingSellers && Array.isArray(list)) {
+          handle(self,rawProduct);return;
         }
         if(++attempts<100)setTimeout(wait,100);
         else update("Seller belum tersedia. Pilih manual jika Digiflazz berubah.");
@@ -112,14 +138,27 @@
       setTimeout(wait,100);
       return result;
     };
+    try { vm.fetchSellers=expose(replacement,vm); }
+    catch {
+      vm.__digiToolsPatched=false;
+      update("Panel aktif, tetapi akses seller halaman diblokir Firefox. Perbarui Violentmonkey lalu muat ulang.");
+      return;
+    }
     update("Siap. Buka Produk lalu pilih seller pada salah satu produk.");
   }
   function scanVue() {
     const roots=[];
-    for(const selector of ["#app","#__nuxt","body"]){const root=document.querySelector(selector)?.__vue__;if(root)roots.push(root)}
-    if(!roots.length)for(const el of document.querySelectorAll("[id],.el-dialog")){if(el.__vue__)roots.push(el.__vue__);if(roots.length>8)break}
+    for(const selector of ["#app","#__nuxt","body"]){const root=vueOf(document.querySelector(selector));if(root)roots.push(root)}
+    if(!roots.length)for(const el of document.querySelectorAll("[id],.el-dialog")){const root=vueOf(el);if(root)roots.push(root);if(roots.length>8)break}
     const seen=new Set();
-    function walk(vm) {if(!vm||seen.has(vm))return;seen.add(vm);patch(vm);for(const child of vm.$children||[])walk(child)}
+    function walk(vm) {
+      vm=unwrap(vm);
+      if(!vm||seen.has(vm))return;
+      seen.add(vm);patch(vm);
+      let children=[];
+      try { children=Array.from(unwrap(vm.$children)||[]); } catch {}
+      for(const child of children)walk(child);
+    }
     for(const vm of roots)walk(vm);
   }
   const autoCodes=new WeakMap();
@@ -170,7 +209,7 @@
       <button id="make-code" type="button">Buat kode</button> <button id="copy-code" type="button" disabled>Salin</button> <strong id="code-result"></strong>
       <label for="preferred">Seller prioritas (pisah koma)</label><textarea id="preferred"></textarea>
       <label for="blocked">Seller diblokir (pisah koma)</label><textarea id="blocked"></textarea>
-      <div id="status" class="status" role="status">Menunggu halaman Produk…</div>
+      <div id="status" class="status" role="status">Auto Seller v1.2 aktif. Menunggu halaman Produk…</div>
     </div><button class="bubble" id="toggle" aria-label="Buka pengaturan auto seller">⚡ Auto Seller</button>`;
     const get=id=>ui.getElementById(id);
     get("enabled").checked=settings.enabled;
