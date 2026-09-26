@@ -2,26 +2,38 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8").replace("const HTML = __HTML__;", "const HTML = '';");
-const { rank, normalizeProduct, validateSettings } = await import("data:text/javascript," + encodeURIComponent(source));
+const { rank, normalizeProduct, validateSettings, changedProduct } = await import("data:text/javascript," + encodeURIComponent(source));
 
 test("seller filtering rejects blocked, expensive, and out of stock candidates", () => {
   const product = { max_price: 11000 };
   const rows = [
-    { seller_name: "Trusted", price: 10000, rating: 4.9, stock: 10, unlimited_stock: 0, connection: "IP", sla: "H+0", description: "sumatra" },
-    { seller_name: "Blocked", price: 9000, rating: 5, stock: 10, unlimited_stock: 0, description: "sumatra" },
-    { seller_name: "Costly", price: 12000, rating: 5, stock: 10, unlimited_stock: 0, description: "sumatra" },
-    { seller_name: "Empty", price: 8000, rating: 5, stock: 0, unlimited_stock: 0, description: "sumatra" }
+    { seller_name: "Trusted", price: 10000, rating: 4.9, stock: 10, unlimited_stock: 0, connection: "IP", sla: "H+0", description: "sumatra", seller_status:1 },
+    { seller_name: "Blocked", price: 9000, rating: 5, stock: 10, unlimited_stock: 0, description: "sumatra", seller_status:1 },
+    { seller_name: "Costly", price: 12000, rating: 5, stock: 10, unlimited_stock: 0, description: "sumatra", seller_status:1 },
+    { seller_name: "Empty", price: 8000, rating: 5, stock: 0, unlimited_stock: 0, description: "sumatra", seller_status:1 }
   ];
-  const config = { minRating: 4, priceCap: 0, weights: { price: 40, connection: 30, sla: 20, stock: 10 } };
+  const config = { minRating: 4, minReviews:0, priceCap: 0, weights: { price: 40, connection: 30, sla: 20, stock: 10 } };
   const result = rank(product, rows, [{ seller_name: "Blocked", mode: "blocked" }], null, config, { patterns: ["sumatra"] });
   assert.equal(result[0].seller_name, "Trusted");
   assert.equal(result.filter(x => x.eligible).length, 1);
   assert.ok(result.find(x => x.seller_name === "Costly").reasons.includes("Harga di atas batas"));
 });
 
-test("settings refuse unverified live switching", () => {
+test("settings validate opt-in live switching", () => {
   const current = { autoSwitch: false, dryRun: true };
-  assert.throws(() => validateSettings({ autoSwitch: true, dryRun: false }, current), /terverifikasi/);
+  assert.deepEqual([validateSettings({ autoSwitch: true, dryRun: false }, current).autoSwitch,validateSettings({ autoSwitch: true, dryRun: false }, current).dryRun],[true,false]);
+});
+
+test("seller selection requires known rating, review count, and active status", () => {
+  const config={minRating:4,minReviews:20,priceCap:11000,weights:{price:40,connection:30,sla:20,stock:10}};
+  const rows=[
+    {seller_name:"Unknown",price:9000,rating:null,review_count:null,stock:5,seller_status:1},
+    {seller_name:"Inactive",price:9000,rating:4.9,review_count:"40+",stock:5,seller_status:0},
+    {seller_name:"Ten",price:9000,rating:4.9,review_count:"<10",stock:5,seller_status:1},
+    {seller_name:"Trusted",price:9500,rating:4.9,review_count:"40+",stock:5,seller_status:1}
+  ];
+  const result=rank({max_price:10000},rows,[],null,config,null);
+  assert.deepEqual(result.filter(x=>x.eligible).map(x=>x.seller_name),["Trusted"]);
 });
 
 test("catalog normalization handles official buyer SKU fields", () => {
@@ -29,4 +41,17 @@ test("catalog normalization handles official buyer SKU fields", () => {
   assert.equal(p.sku, "ML86");
   assert.equal(p.seller_active, 0);
   assert.equal(p.price, 19000);
+});
+
+test("switch saves exact Digiflazz seller fields and preserves unrelated product data", () => {
+  const current={id:7,code:"ML86",note:"keep",max_price:19000,seller_sku_id:"old"};
+  const candidate={id:"sku42",id_int:42,seller:"Shop",connectionType:"jabber",seller_sku_code:"ML86S",deskripsi:"Diamond",price:17000,stock:4,unlimited_stock:0,seller_details:{sla:"H+0"},status_sellerSku:1};
+  const result=changedProduct(current,candidate,true);
+  assert.equal(result.note,"keep");
+  assert.equal(result.seller_sku_id,"sku42");
+  assert.equal(result.seller_sku_id_int,42);
+  assert.equal(result.max_price,19000);
+  assert.equal(result.multi,false);
+  assert.equal(changedProduct(current,candidate,false).max_price,17000);
+  assert.equal(current.seller_sku_id,"old");
 });

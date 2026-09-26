@@ -142,8 +142,8 @@
             '<div class="controls" style="margin-top:16px">'+button(d.settings.scanEnabled?"Hentikan monitor":"Mulai monitor","monitor","primary")+button("Pindai sekali","scan-now")+'</div>'+
             '<p class="hint">Scan terakhir: '+(scan?fmt(scan.finished_at)+" · "+esc(scan.status)+" · "+esc(scan.total)+" produk":"belum pernah")+'</p>'+
           '</div>'+
-          '<div class="card"><div class="section-head"><h2>Mode perubahan</h2>'+badge("Pratinjau","warn")+'</div>'+
-            '<p class="sub">Aturan dan ranking seller dapat disiapkan. Perubahan seller ke Digiflazz hanya tersedia setelah endpoint tulisnya diverifikasi.</p>'+
+          '<div class="card"><div class="section-head"><h2>Mode perubahan</h2>'+badge(d.settings.autoSwitch&&!d.settings.dryRun?"Otomatis aktif":d.liveSwitchAvailable?"Manual siap":"Uji manual dulu",d.settings.autoSwitch&&!d.settings.dryRun?"good":"warn")+'</div>'+
+            '<p class="sub">Pilih kandidat pada detail produk untuk pindah seller manual. Auto-switch dapat dinyalakan setelah satu perubahan manual berhasil dikonfirmasi dari Digiflazz.</p>'+
             '<div class="controls" style="margin-top:16px">'+button("Atur seller","goto-rules")+button("Lihat perubahan","goto-history")+'</div>'+
           '</div>'+
         '</section>'+
@@ -169,9 +169,10 @@
       $("modal").innerHTML='<div class="modal-shell"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-top"><div><h2 id="modal-title">'+esc(p.name)+'</h2><span class="sku">'+esc(p.sku)+'</span></div><button class="button tiny" data-action="close">Tutup</button></div>'+
         '<div class="grid two"><div class="card"><div class="metric-label">Seller sekarang</div><div class="name">'+esc(p.seller_name||"—")+'</div><div class="hint">'+rupiah(p.price)+'</div></div><div class="card"><div class="metric-label">Harga maksimum</div><div class="name">'+(p.max_price?rupiah(p.max_price):"—")+'</div><div class="hint">Status '+(problem(p)?"perlu perhatian":"terpantau")+'</div></div></div>'+
         '<div class="controls" style="margin-top:14px"><button class="button tiny" data-action="lock" data-sku="'+esc(p.sku)+'">'+(p.locked?"Buka kunci otomasi":"Kunci dari otomasi")+'</button><button class="button tiny" data-action="copy-price">Salin harga max</button></div>'+
+        '<div class="controls" style="margin-top:12px"><label for="product-max" style="margin:0">Set harga max</label><input id="product-max" type="number" min="1" inputmode="numeric" style="max-width:180px" value="'+esc(p.max_price||"")+'"><button class="button tiny" data-action="save-max">Simpan ke Digiflazz</button></div>'+
         '<h3 style="margin-top:20px">Kandidat seller</h3>'+
-        (d.options.length?'<div class="table-wrap"><table><thead><tr><th>Seller</th><th>Harga</th><th>Rating</th><th>Skor</th><th>Aturan</th></tr></thead><tbody>'+d.options.map(o=>'<tr><td class="name">'+esc(o.seller_name)+'</td><td>'+rupiah(o.price)+'</td><td>'+esc(o.rating??"—")+'</td><td>'+esc(o.score)+'</td><td>'+badge(o.eligible?"Lolos":o.reasons.join(", "),o.eligible?"good":"bad")+'</td></tr>').join("")+'</tbody></table></div>':'<div class="empty">Data alternatif seller belum tersedia dari respons Digiflazz. Scan tidak menebak harga atau pilihan seller.</div>')+
-        '<p class="hint">Perubahan seller live belum dibuka sampai request Digiflazz diverifikasi. Detail dan kunci otomasi tetap dapat dipakai.</p></div></div>';
+        (d.options.length?'<div class="table-wrap"><table><thead><tr><th>Seller</th><th>Harga</th><th>Rating</th><th>Skor</th><th>Aturan</th><th>Tindakan</th></tr></thead><tbody>'+d.options.map(o=>'<tr><td class="name">'+esc(o.seller_name)+'</td><td>'+rupiah(o.price)+'</td><td>'+esc(o.rating??"—")+' <small>('+esc(o.review_count||"—")+')</small></td><td>'+esc(o.score)+'</td><td>'+badge(o.eligible?"Lolos":o.reasons.join(", "),o.eligible?"good":"bad")+'</td><td><button class="button tiny" data-action="switch-seller" data-seller-id="'+esc(o.seller_id)+'" data-seller-name="'+esc(o.seller_name)+'" data-seller-price="'+esc(o.price)+'" '+(!o.eligible||!d.connectorReady||String(p.current_seller_sku_id)===o.seller_id?"disabled":"")+'>Pilih</button></td></tr>').join("")+'</tbody></table></div>':'<div class="empty">Data alternatif seller belum tersedia dari respons Digiflazz.</div>')+
+        '<p class="hint">Pilih akan menyimpan perubahan ke Digiflazz. Batas harga, rating, ulasan, stok, dan status diperiksa ulang di server sebelum menyimpan.</p></div></div>';
     }
     async function sellers() {
       const d=await api("/api/sellers");
@@ -203,7 +204,7 @@
     }
     async function settings() {
       const d=await api("/api/settings"),s=d.settings;
-      $("content").innerHTML='<form id="settings-form" class="stack"><div class="grid two"><section class="card"><h2>Monitor</h2><div class="fields two"><div class="field"><label for="interval">Interval scan (menit)</label><input id="interval" name="scanIntervalMinutes" type="number" min="5" max="1440" value="'+esc(s.scanIntervalMinutes)+'"></div><div class="field"><label for="minrating">Rating minimal global</label><input id="minrating" name="minRating" type="number" min="0" max="5" step=".1" value="'+esc(s.minRating)+'"></div><div class="field"><label for="minreviews">Jumlah ulasan minimal</label><input id="minreviews" name="minReviews" type="number" min="0" value="'+esc(s.minReviews)+'"></div><div class="field"><label for="pricecap">Batas harga global (Rp)</label><input id="pricecap" name="priceCap" type="number" min="0" value="'+esc(s.priceCap)+'"></div></div><div class="stack"><label class="check"><input name="scanEnabled" type="checkbox" '+(s.scanEnabled?"checked":"")+'> Jalankan monitor otomatis</label><label class="check"><input name="dryRun" type="checkbox" checked disabled> Pratinjau perubahan seller</label><label class="check"><input name="proactiveScan" type="checkbox" '+(s.proactiveScan?"checked":"")+'> Catat kandidat harga lebih baik</label></div></section>'+
+      $("content").innerHTML='<form id="settings-form" class="stack"><div class="grid two"><section class="card"><h2>Monitor</h2><div class="fields two"><div class="field"><label for="interval">Interval scan (menit)</label><input id="interval" name="scanIntervalMinutes" type="number" min="5" max="1440" value="'+esc(s.scanIntervalMinutes)+'"></div><div class="field"><label for="minrating">Rating minimal global</label><input id="minrating" name="minRating" type="number" min="0" max="5" step=".1" value="'+esc(s.minRating)+'"></div><div class="field"><label for="minreviews">Jumlah ulasan minimal</label><input id="minreviews" name="minReviews" type="number" min="0" value="'+esc(s.minReviews)+'"></div><div class="field"><label for="pricecap">Batas harga global (Rp)</label><input id="pricecap" name="priceCap" type="number" min="0" value="'+esc(s.priceCap)+'"></div></div><div class="stack"><label class="check"><input name="scanEnabled" type="checkbox" '+(s.scanEnabled?"checked":"")+'> Jalankan monitor otomatis</label><label class="check"><input name="autoSwitch" type="checkbox" '+(s.autoSwitch?"checked":"")+' '+(!state.bootstrap?.liveSwitchAvailable&&!s.autoSwitch?"disabled":"")+'> Auto-switch (tersedia setelah satu switch manual sukses)</label><label class="check"><input name="dryRun" type="checkbox" '+(s.dryRun?"checked":"")+'> Pratinjau saja, tanpa perubahan otomatis</label><label class="check"><input name="autoFillMaxPrice" type="checkbox" '+(s.autoFillMaxPrice?"checked":"")+'> Isi max price otomatis saat berganti seller</label><label class="check"><input name="proactiveScan" type="checkbox" '+(s.proactiveScan?"checked":"")+'> Pantau kandidat harga lebih baik</label></div></section>'+
       '<section class="card"><h2>Skor seller</h2><p class="sub">Jumlah bobot harus 100%.</p><div class="fields two">'+[["price","Harga"],["connection","Koneksi"],["sla","SLA"],["stock","Stok"]].map(([k,n])=>'<div class="field"><label for="w-'+k+'">'+n+' (%)</label><input id="w-'+k+'" name="w-'+k+'" type="number" min="0" max="100" value="'+esc(s.weights[k])+'"></div>').join("")+'</div><label for="save-mode">Simpan pengaturan</label><select id="save-mode" name="saveMode"><option value="manual" '+(s.saveMode==="manual"?"selected":"")+'>Manual (tombol Simpan)</option><option value="auto" '+(s.saveMode==="auto"?"selected":"")+'>Otomatis saat diubah</option></select><p class="hint">Perubahan pada dashboard disimpan ke D1. OtoSwitch tidak terhubung ke pengaturan alat ini.</p></section></div><div><button class="button primary">Simpan pengaturan</button></div></form>';
       const form=$("settings-form");form.dataset.auto=s.saveMode;
       form.addEventListener("change",()=>{if($("save-mode").value==="auto" && form.checkValidity())form.requestSubmit()});
@@ -227,6 +228,22 @@
       if(a==="search"){state.q=$("search-product").value;state.status=$("filter-product").value;state.page=1;return render()}
       if(a==="prev"||a==="next"){state.page+=a==="next"?1:-1;return render()}
       if(a==="product")return product(el.dataset.sku);
+      if(a==="switch-seller"){
+        const p=state.selected;
+        if(!confirm("Pindah seller SKU "+p.sku+" ke "+el.dataset.sellerName+" ("+rupiah(el.dataset.sellerPrice)+") di Digiflazz?"))return;
+        toast("Menyimpan dan mengecek seller di Digiflazz…");
+        const result=await write("/api/products/"+encodeURIComponent(p.sku)+"/switch",{sellerId:el.dataset.sellerId});
+        toast("Seller "+result.seller+" tersimpan dan terkonfirmasi.");
+        $("modal").hidden=true;return render();
+      }
+      if(a==="save-max"){
+        const p=state.selected,amount=Number($("product-max").value);
+        if(!Number.isSafeInteger(amount)||amount<1)throw Error("Masukkan harga maksimum yang benar.");
+        if(!confirm("Simpan harga maksimum "+rupiah(amount)+" untuk SKU "+p.sku+" di Digiflazz?"))return;
+        toast("Menyimpan harga maksimum…");
+        await write("/api/products/"+encodeURIComponent(p.sku)+"/max-price",{maxPrice:amount});
+        toast("Harga maksimum dikonfirmasi di Digiflazz.");$("modal").hidden=true;return render();
+      }
       if(a==="close"){$("modal").hidden=true;return}
       if(a==="lock"){const p=state.selected;await write("/api/products/"+encodeURIComponent(p.sku)+"/lock",{locked:!p.locked});toast("Kunci produk diperbarui.");$("modal").hidden=true;return render()}
       if(a==="copy-price"){await navigator.clipboard.writeText(String(state.selected.max_price||state.selected.price));return toast("Harga disalin.")}
@@ -253,7 +270,7 @@
         if(id==="zone-form")await write("/api/zones",Object.fromEntries(b));
         if(id==="assign-form")await write("/api/zones/assign",Object.fromEntries(b));
         if(id==="connection-form"){await write("/api/connection",{curl:b.get("curl")});$("curl").value=""}
-        if(id==="settings-form"){const input=Object.fromEntries(b);await write("/api/settings",{scanEnabled:b.has("scanEnabled"),proactiveScan:b.has("proactiveScan"),scanIntervalMinutes:Number(b.get("scanIntervalMinutes")),minRating:Number(b.get("minRating")),minReviews:Number(b.get("minReviews")),priceCap:Number(b.get("priceCap")),saveMode:b.get("saveMode"),weights:{price:Number(b.get("w-price")),connection:Number(b.get("w-connection")),sla:Number(b.get("w-sla")),stock:Number(b.get("w-stock"))}})}
+        if(id==="settings-form"){await write("/api/settings",{scanEnabled:b.has("scanEnabled"),autoSwitch:b.has("autoSwitch"),dryRun:b.has("dryRun"),autoFillMaxPrice:b.has("autoFillMaxPrice"),proactiveScan:b.has("proactiveScan"),scanIntervalMinutes:Number(b.get("scanIntervalMinutes")),minRating:Number(b.get("minRating")),minReviews:Number(b.get("minReviews")),priceCap:Number(b.get("priceCap")),saveMode:b.get("saveMode"),weights:{price:Number(b.get("w-price")),connection:Number(b.get("w-connection")),sla:Number(b.get("w-sla")),stock:Number(b.get("w-stock")}})}
         toast("Tersimpan.");if(id!=="settings-form"||b.get("saveMode")!=="auto")await render();
       }catch(err){error(err)}
     });
