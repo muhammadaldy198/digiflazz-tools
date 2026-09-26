@@ -270,7 +270,7 @@
         if(id==="zone-form")await write("/api/zones",Object.fromEntries(b));
         if(id==="assign-form")await write("/api/zones/assign",Object.fromEntries(b));
         if(id==="connection-form"){await write("/api/connection",{curl:b.get("curl")});$("curl").value=""}
-        if(id==="settings-form"){await write("/api/settings",{scanEnabled:b.has("scanEnabled"),autoSwitch:b.has("autoSwitch"),dryRun:b.has("dryRun"),autoFillMaxPrice:b.has("autoFillMaxPrice"),proactiveScan:b.has("proactiveScan"),scanIntervalMinutes:Number(b.get("scanIntervalMinutes")),minRating:Number(b.get("minRating")),minReviews:Number(b.get("minReviews")),priceCap:Number(b.get("priceCap")),saveMode:b.get("saveMode"),weights:{price:Number(b.get("w-price")),connection:Number(b.get("w-connection")),sla:Number(b.get("w-sla")),stock:Number(b.get("w-stock")}})}
+        if(id==="settings-form"){await write("/api/settings",{scanEnabled:b.has("scanEnabled"),autoSwitch:b.has("autoSwitch"),dryRun:b.has("dryRun"),autoFillMaxPrice:b.has("autoFillMaxPrice"),proactiveScan:b.has("proactiveScan"),scanIntervalMinutes:Number(b.get("scanIntervalMinutes")),minRating:Number(b.get("minRating")),minReviews:Number(b.get("minReviews")),priceCap:Number(b.get("priceCap")),saveMode:b.get("saveMode"),weights:{price:Number(b.get("w-price")),connection:Number(b.get("w-connection")),sla:Number(b.get("w-sla")),stock:Number(b.get("w-stock"))}})}
         toast("Tersimpan.");if(id!=="settings-form"||b.get("saveMode")!=="auto")await render();
       }catch(err){error(err)}
     });
