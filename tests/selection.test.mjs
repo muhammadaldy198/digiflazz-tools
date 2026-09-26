@@ -65,3 +65,12 @@ test("service codes are deterministic and use game initials",()=>{
   assert.equal(serviceCode("","Free Fire 1000DIAMOND"),"FF1000");
   assert.equal(serviceCode("Mobile Legends","Weekly Pass"),null);
 });
+
+
+test("unhealthy products can choose a replacement above the stale product max price and tolerate unknown optional fields",()=>{
+  const product={seller_name:"Old",seller_active:0,price:10000,max_price:10100,stock:1,unlimited_stock:0};
+  const config={minRating:0,minReviews:0,priceCap:0,weights:{price:40,connection:30,sla:20,stock:10}};
+  const rows=[{seller_name:"Replacement",seller_id:"new",price:10200,rating:4.8,stock:null,seller_status:null,connection:"IP",sla:"H+0"}];
+  const result=rank(product,rows,[],null,config,null);
+  assert.equal(result[0].eligible,true);
+});
