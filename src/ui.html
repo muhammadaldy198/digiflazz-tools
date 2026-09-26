@@ -143,8 +143,8 @@
             '<p class="hint">Scan terakhir: '+(scan?fmt(scan.finished_at)+" · "+esc(scan.status)+" · "+esc(scan.total)+" produk":"belum pernah")+'</p>'+
           '</div>'+
           '<div class="card"><div class="section-head"><h2>Mode perubahan</h2>'+badge(d.settings.autoSwitch&&!d.settings.dryRun?"Otomatis aktif":d.liveSwitchAvailable?"Manual siap":"Uji manual dulu",d.settings.autoSwitch&&!d.settings.dryRun?"good":"warn")+'</div>'+
-            '<p class="sub">Pilih kandidat pada detail produk untuk pindah seller manual. Auto-switch dapat dinyalakan setelah satu perubahan manual berhasil dikonfirmasi dari Digiflazz.</p>'+
-            '<div class="controls" style="margin-top:16px">'+button("Atur seller","goto-rules")+button("Lihat perubahan","goto-history")+'</div>'+
+            '<p class="sub">Auto-switch memproses beberapa SKU bermasalah sekaligus setiap siklus, memilih seller terbaik berdasarkan harga, koneksi, SLA, stok, rating, prioritas, blokir, aturan, dan zona. Satu switch manual sukses tetap diwajibkan sebagai verifikasi awal.</p>'+
+            '<div class="controls" style="margin-top:16px">'+button("Atur seller","goto-rules")+button("Lihat perubahan","goto-history")+button("Auto-switch sekarang","run-auto","primary")+'</div>'+
           '</div>'+
         '</section>'+
         '<section class="section card"><div class="section-head"><h2>Aktivitas terbaru</h2>'+button("Semua log","goto-logs","tiny")+'</div>'+feed(d.events)+'</section>';
@@ -227,6 +227,7 @@
     async function write(path,body,method="POST") {return api(path,{method,body:method==="DELETE"?"{}":JSON.stringify(body||{})})}
     async function action(a,el) {
       if(a==="scan-now"){toast("Memindai katalog…");const d=await write("/api/scan");toast(d.total+" produk dipindai; "+d.issues+" perlu perhatian.");return render()}
+      if(a==="run-auto"){toast("Memilih seller terbaik untuk batch produk bermasalah…");const d=await write("/api/automation/run",{});toast("Auto-switch: "+d.switched+" berhasil, "+d.noCandidate+" tanpa kandidat, "+d.failed+" gagal.");return render()}
       if(a==="monitor"){const d=state.bootstrap;await write("/api/settings",{scanEnabled:!d.settings.scanEnabled});return render()}
       if(a.startsWith("goto-"))return render({ "goto-rules":"rules","goto-history":"history","goto-logs":"logs" }[a]);
       if(a==="search"){state.q=$("search-product").value;state.status=$("filter-product").value;state.page=1;return render()}
