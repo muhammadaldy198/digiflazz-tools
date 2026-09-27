@@ -278,3 +278,18 @@ test("attention option coverage uses one grouped count instead of a per-product 
   assert.match(source,/LEFT JOIN \(SELECT sku,count\(\*\) AS option_count FROM seller_options GROUP BY sku\) option_counts/);
   assert.doesNotMatch(source,/SELECT count\(\*\) FROM seller_options all_options WHERE all_options\.sku=p\.sku/);
 });
+
+
+test("attention quality refresh batch is configurable and bounded",()=>{
+  const current={attentionRefreshBatchSize:5};
+  assert.equal(validateSettings({attentionRefreshBatchSize:7},current).attentionRefreshBatchSize,7);
+  assert.equal(validateSettings({attentionRefreshBatchSize:99},current).attentionRefreshBatchSize,10);
+  assert.match(source,/attentionRefreshBatchSize:\s*5/);
+});
+
+test("full scans rotate the oldest rating and SLA coverage without mixing it into auto-switch",()=>{
+  assert.match(source,/async function refreshAttentionCoverage/);
+  assert.match(source,/ORDER BY CASE WHEN max\(o\.last_seen\) IS NULL THEN 0 ELSE 1 END ASC,max\(o\.last_seen\) ASC/);
+  assert.match(source,/const qualityRefresh=await refreshAttentionCoverage\(env,cfg\.attentionRefreshBatchSize\)/);
+  assert.match(source,/qualityKnown=attention\.filter/);
+});

@@ -6,7 +6,7 @@ const DEFAULTS = {
   scanEnabled: false, dryRun: true, autoSwitch: false, scanIntervalMinutes: 5,
   minRating: 4, minReviews: 0, priceCap: 0, preserveMaxPrice: true,
   saveMode: "manual", autoFillMaxPrice: true, proactiveScan: false,
-  reoptimizeHours: 0, minSavingsPercent: 5, cooldownHours: 24, autoSwitchBatchSize: 5,
+  reoptimizeHours: 0, minSavingsPercent: 5, cooldownHours: 24, autoSwitchBatchSize: 5, attentionRefreshBatchSize: 5,
   weights: { price: 40, connection: 30, sla: 20, stock: 10 },
   priceTolerancePercent: 2,
   maxPriceOffset: 0
@@ -240,8 +240,8 @@ function validateSettings(input, current) {
     else if (key === "maxPriceOffset") {
       if(!Number.isSafeInteger(Number(value))||Number(value)<0||Number(value)>1000000000)throw Error("Tambahan max price harus angka rupiah bulat antara 0 dan 1 miliar.");
       next[key]=Number(value);
-    } else if (["minRating","minReviews","priceCap","scanIntervalMinutes","reoptimizeHours","minSavingsPercent","cooldownHours","autoSwitchBatchSize","priceTolerancePercent"].includes(key)) {
-      const limits = {minRating:[4,5],minReviews:[0,100000],priceCap:[0,1000000000],scanIntervalMinutes:[5,1440],reoptimizeHours:[0,720],minSavingsPercent:[0,100],cooldownHours:[1,720],autoSwitchBatchSize:[1,10],priceTolerancePercent:[0,20]};
+    } else if (["minRating","minReviews","priceCap","scanIntervalMinutes","reoptimizeHours","minSavingsPercent","cooldownHours","autoSwitchBatchSize","attentionRefreshBatchSize","priceTolerancePercent"].includes(key)) {
+      const limits = {minRating:[4,5],minReviews:[0,100000],priceCap:[0,1000000000],scanIntervalMinutes:[5,1440],reoptimizeHours:[0,720],minSavingsPercent:[0,100],cooldownHours:[1,720],autoSwitchBatchSize:[1,10],attentionRefreshBatchSize:[1,10],priceTolerancePercent:[0,20]};
       next[key] = bounded(value, ...limits[key], current[key]);
     } else if (key === "saveMode" && ["manual","auto"].includes(value)) next[key] = value;
     else if (key === "weights") {
@@ -334,11 +334,13 @@ async function scan(env, reason = "manual") {
     }
     const sellerStmts = [...new Set(products.map(x=>x.seller_name).filter(Boolean))].map(name=>env.DB.prepare("INSERT INTO sellers(seller_id,name,raw) VALUES(?,?,?) ON CONFLICT(seller_id) DO NOTHING").bind(name,name,"{}"));
     for (let i=0;i<sellerStmts.length;i+=80) await env.DB.batch(sellerStmts.slice(i,i+80));
-    const attention=await loadAttentionRows(env,await settings(env));
+    const cfg=await settings(env);
+    const qualityRefresh=await refreshAttentionCoverage(env,cfg.attentionRefreshBatchSize);
+    const attention=await loadAttentionRows(env,cfg);
     issues=attention.filter(x=>x.needs_attention).length;
     await env.DB.prepare("UPDATE scan_runs SET status='success',finished_at=CURRENT_TIMESTAMP,total=?,issues=?,message=? WHERE id=?").bind(products.length,issues,reason,runId).run();
-    await log(env,"INFO","scan",products.length+" produk dipindai; "+issues+" perlu perhatian.");
-    return { ok:true,total:products.length,issues };
+    await log(env,"INFO","scan",products.length+" produk dipindai; "+issues+" perlu perhatian; "+qualityRefresh.refreshed+" rating/SLA diperbarui.");
+    return { ok:true,total:products.length,issues,qualityRefreshed:qualityRefresh.refreshed };
   } catch (error) {
     await env.DB.prepare("UPDATE scan_runs SET status='error',finished_at=CURRENT_TIMESTAMP,message=? WHERE id=?").bind(error.message,runId).run();
     await log(env,"ERROR","scan",error.message);
@@ -513,6 +515,31 @@ async function refreshOptions(env, sku, productId) {
   }).filter(Boolean);
   for (let i=0;i<cmds.length;i+=80) await env.DB.batch(cmds.slice(i,i+80));
   return cmds.length;
+}
+async function refreshAttentionCoverage(env, requestedLimit=5) {
+  const limit=Math.trunc(bounded(requestedLimit,1,10,5));
+  const rows=await env.DB.prepare(`
+    SELECT p.sku,p.product_id,max(o.last_seen) AS quality_last_seen
+    FROM products p
+    LEFT JOIN seller_options o ON o.sku=p.sku
+    WHERE p.active=1
+    GROUP BY p.sku,p.product_id
+    ORDER BY CASE WHEN max(o.last_seen) IS NULL THEN 0 ELSE 1 END ASC,max(o.last_seen) ASC,p.sku ASC
+    LIMIT ?
+  `).bind(limit).all();
+  let refreshed=0,failed=0,lastError=null;
+  for(const row of rows.results) {
+    try {
+      await refreshOptions(env,row.sku,row.product_id);
+      refreshed++;
+    } catch(error) {
+      failed++;lastError=error;
+      if(error?.status===401||error?.status===403)break;
+    }
+  }
+  if(failed) await log(env,"WARN","attention-refresh",failed+" pembaruan rating/SLA gagal"+(lastError?": "+lastError.message:"")+".");
+  if(refreshed) await log(env,"INFO","attention-refresh",refreshed+" produk diperbarui data rating/SLA-nya.");
+  return {refreshed,failed};
 }
 async function rankedOptions(env, sku, refresh = true) {
   const entry = await env.DB.prepare("SELECT product_id FROM products WHERE sku=?").bind(sku).first();
@@ -819,7 +846,9 @@ async function api(req, env, url) {
         env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first()
       ]);
       const issues=attention.filter(x=>x.needs_attention).length;
-      return reply({ok:true,connection:{connected:!!c,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at},settings:cfg,counts:{products:attention.length,issues,sellers:sellerCount.total,attentionBreakdown:attentionBreakdown(attention)},lastScan:last,events:events.results,liveSwitchAvailable:!!verified});
+      const activeProducts=attention.filter(x=>Number(x.active)===1).length;
+      const qualityKnown=attention.filter(x=>Number(x.active)===1&&Number(x.option_count)>0).length;
+      return reply({ok:true,connection:{connected:!!c,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at},settings:cfg,counts:{products:attention.length,issues,sellers:sellerCount.total,attentionBreakdown:attentionBreakdown(attention),activeProducts,qualityKnown},lastScan:last,events:events.results,liveSwitchAvailable:!!verified});
     }
     if (method==="GET" && path==="/api/connection/status") {
       const c=await conn(env);
