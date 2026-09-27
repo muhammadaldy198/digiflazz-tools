@@ -442,3 +442,20 @@ test("missing product Max Price is flagged and excluded from Auto Switch targets
   assert.match(source,/AND p\.max_price>0/);
   assert.match(source,/Harga\|Max Price/);
 });
+
+
+test("overview counts missing per-product Max Price",()=>{
+  assert.match(source,/sum\(CASE WHEN p\.max_price<=0 THEN 1 ELSE 0 END\) missingMaxPrice/);
+  assert.match(source,/missingMaxPrice:Number\(summary\?\.missingMaxPrice\)\|\|0/);
+});
+
+test("product API exposes missing Max Price filter",()=>{
+  assert.match(source,/status==="missing-max"\)where\+=" AND p\.max_price<=0"/);
+});
+
+test("cooldown is skipped instead of counted as failure",()=>{
+  assert.match(source,/let switched=0,noCandidate=0,skipped=0,failed=0/);
+  assert.match(source,/error\?\.message==="Produk masih dalam masa jeda perpindahan\."/);
+  assert.match(source,/status:"skipped",reason:"cooldown"/);
+  assert.match(source,/summary\.skipped\+" dilewati"/);
+});
