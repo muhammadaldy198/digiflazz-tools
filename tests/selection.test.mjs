@@ -523,7 +523,8 @@ test("definitive Digiflazz 4xx rejection is recorded as error, not unknown",()=>
 test("auto switch temporarily excludes a recently rejected seller target",()=>{
   assert.match(source,/status='error' AND started_at > datetime\('now','-6 hours'\)/);
   assert.match(source,/eligibleOptions=selection\.options\.filter/);
-  assert.match(source,/String\(o\.seller_id\\)!==rejectedId|String\(o\.seller_id\)!==rejectedId/);
+  assert.match(source,/eligibleOptions=selection\.options\.filter/);
+  assert.ok(source.includes("String(o.seller_id)!==rejectedId"));
 });
 
 test("remote save surfaces a bounded Digiflazz rejection detail",()=>{
