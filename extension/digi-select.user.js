@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Digi Tools — Auto Select Seller
 // @namespace    https://tools.lfamiliastore.my.id/
-// @version      1.6.0
+// @version      1.7.0
 // @description  Pilih seller langsung di halaman produk Digiflazz. Sesi tetap di browser.
 // @match        https://member.digiflazz.com/*
 // @run-at       document-end
@@ -17,7 +17,7 @@
   "use strict";
   const testing=typeof module!=="undefined" && !!module.exports;
   const KEY = "digiTools.autoSeller.v1";
-  const DEFAULTS = {enabled:true,saveMode:"manual",minRating:4,minReviews:0,priceCap:0,autoFillMaxPrice:true,maxPriceOffset:0,autoServiceCode:true,preferred:"",blocked:""};
+  const DEFAULTS = {enabled:true,saveMode:"manual",minRating:4,minReviews:0,priceCap:0,priceTolerancePercent:2,autoFillMaxPrice:true,maxPriceOffset:0,autoServiceCode:true,preferred:"",blocked:""};
   const str = value => String(value ?? "").trim();
   const names = value => new Set(str(value).split(/[\n,]/).map(x=>x.trim().toLowerCase()).filter(Boolean));
   function reviewCount(value) {
@@ -56,10 +56,17 @@
     }
     return hits.length?Math.min(...hits):999;
   }
+  function reviewValue(value) {
+    const raw=str(value),match=raw.match(/\d+/);
+    if(!match)return 0;
+    const n=Number(match[0]);
+    return raw.startsWith("<")?Math.max(0,n-1):n;
+  }
   function chooseSeller(choices, product, options) {
     const cfg={...DEFAULTS,...options}, blocked=names(cfg.blocked), preferred=names(cfg.preferred);
     const cap=Math.min(...[product?.max_price,cfg.priceCap].map(Number).filter(x=>x>0),Infinity);
     const minRating=Math.max(4,Math.min(5,Number(cfg.minRating)||4));
+    const tolerance=Math.max(0,Math.min(20,Number(cfg.priceTolerancePercent)||0));
     const valid=(Array.isArray(choices)?choices:[]).filter(x=>{
       const price=Number(x.price),rating=x.reviewAvg==null?null:Number(x.reviewAvg);
       return x.id!=null && str(x.id)!==str(product?.seller_sku_id) &&
@@ -68,13 +75,30 @@
         rating!=null && Number.isFinite(rating) && rating>=minRating &&
         reviewCount(x.rating_qty)>=Number(cfg.minReviews||0) &&
         (Number(x.stock)>0 || Number(x.unlimited_stock)===1);
-    });
-    return valid.sort((a,b)=>
-      slaDays(a.seller_details?.sla)-slaDays(b.seller_details?.sla) ||
-      Number(a.price)-Number(b.price) ||
-      Number(b.reviewAvg||0)-Number(a.reviewAvg||0) ||
-      Number(preferred.has(str(b.seller).toLowerCase()))-Number(preferred.has(str(a.seller).toLowerCase()))
-    )[0] || null;
+    }).map(x=>({...x,_sla:slaDays(x.seller_details?.sla),_reviews:reviewValue(x.rating_qty)}));
+    const cheapestBySla=new Map();
+    for(const x of valid){
+      const old=cheapestBySla.get(x._sla);
+      if(old==null||Number(x.price)<old)cheapestBySla.set(x._sla,Number(x.price));
+    }
+    for(const x of valid){
+      const ref=cheapestBySla.get(x._sla);
+      x._within=Number(x.price)<=ref*(1+tolerance/100)+1e-9;
+    }
+    return valid.sort((a,b)=>{
+      const sla=a._sla-b._sla;if(sla)return sla;
+      const band=Number(b._within)-Number(a._within);if(band)return band;
+      if(a._within&&b._within) {
+        return Number(b.reviewAvg||0)-Number(a.reviewAvg||0) ||
+          b._reviews-a._reviews ||
+          Number(a.price)-Number(b.price) ||
+          Number(preferred.has(str(b.seller).toLowerCase()))-Number(preferred.has(str(a.seller).toLowerCase()));
+      }
+      return Number(a.price)-Number(b.price) ||
+        Number(b.reviewAvg||0)-Number(a.reviewAvg||0) ||
+        b._reviews-a._reviews ||
+        Number(preferred.has(str(b.seller).toLowerCase()))-Number(preferred.has(str(a.seller).toLowerCase()));
+    })[0] || null;
   }
 
   if (!testing && location.hostname !== "member.digiflazz.com") return;
@@ -250,10 +274,12 @@
       input[type=checkbox]{margin-right:6px} .row{display:flex;align-items:center;gap:8px}.row>label{flex:1}
       textarea{height:43px;resize:vertical} .status{padding:8px;border-radius:7px;background:#234254;color:#d6eff5;margin-top:10px}
     </style><div class="box" id="box"><h3>Auto Seller Digiflazz</h3>
-      <p>Prioritas: <strong>rating 4–5 → SLA tercepat → harga termurah</strong>. Jenis koneksi tidak dipakai.</p>
+      <p>Prioritas: <strong>rating minimal 4 → SLA tercepat → toleransi harga → rating/review terbaik</strong>. Jenis koneksi tidak dipakai.</p>
       <label><input id="enabled" type="checkbox"> Aktifkan pemilihan</label>
       <label for="mode">Simpan perubahan produk</label><select id="mode"><option value="manual">Manual: tekan Simpan di Digiflazz</option><option value="auto">Otomatis setelah seller dipilih</option></select>
       <div class="row"><label for="rating">Rating minimal<input id="rating" type="number" min="4" max="5" step="0.1"></label><label for="reviews">Ulasan minimal<input id="reviews" type="number" min="0"></label></div>
+      <label for="tolerance">Toleransi harga (%)</label><input id="tolerance" type="number" min="0" max="20" step="0.1">
+      <p>Seller dalam toleransi dari harga termurah dibandingkan lagi berdasarkan rating, ulasan, lalu harga.</p>
       <label for="cap">Batas harga global (Rp; 0 = ikut max produk)</label><input id="cap" type="number" min="0">
       <label><input id="fill" type="checkbox"> Isi max price saat seller terpilih</label>
       <label for="offset">Tambahan max price untuk semua produk (Rp)</label><input id="offset" type="number" min="0" placeholder="1000">
@@ -270,6 +296,7 @@
     get("mode").value=settings.saveMode;
     get("rating").value=settings.minRating;
     get("reviews").value=settings.minReviews;
+    get("tolerance").value=settings.priceTolerancePercent;
     get("cap").value=settings.priceCap;
     get("fill").checked=settings.autoFillMaxPrice;
     get("offset").value=settings.maxPriceOffset;
@@ -280,7 +307,7 @@
     get("toggle").onclick=()=>get("box").classList.toggle("open");
     get("fill-all-codes").onclick=()=>fillAllCodes(true);
     ui.addEventListener("change",()=>{
-      settings={enabled:get("enabled").checked,saveMode:get("mode").value,minRating:Math.min(5,Math.max(4,Number(get("rating").value)||4)),minReviews:Math.max(0,Number(get("reviews").value)||0),priceCap:Math.max(0,Number(get("cap").value)||0),autoFillMaxPrice:get("fill").checked,maxPriceOffset:Math.min(1000000000,Math.max(0,Math.trunc(Number(get("offset").value)||0))),autoServiceCode:get("code").checked,preferred:get("preferred").value,blocked:get("blocked").value};
+      settings={enabled:get("enabled").checked,saveMode:get("mode").value,minRating:Math.min(5,Math.max(4,Number(get("rating").value)||4)),minReviews:Math.max(0,Number(get("reviews").value)||0),priceTolerancePercent:Math.min(20,Math.max(0,Number(get("tolerance").value)||0)),priceCap:Math.max(0,Number(get("cap").value)||0),autoFillMaxPrice:get("fill").checked,maxPriceOffset:Math.min(1000000000,Math.max(0,Math.trunc(Number(get("offset").value)||0))),autoServiceCode:get("code").checked,preferred:get("preferred").value,blocked:get("blocked").value};
       localStorage.setItem(KEY,JSON.stringify(settings));update("Pengaturan tersimpan di browser ini.");
     });
     (document.documentElement||document.body).append(host);
@@ -303,7 +330,7 @@
     },true);
     setInterval(scanVue,900);
   }
-  if(testing) {module.exports={chooseSeller,reviewCount,patch,serviceCode,maxPriceForSeller,slaDays};return}
+  if(testing) {module.exports={chooseSeller,reviewCount,patch,serviceCode,maxPriceForSeller,slaDays,reviewValue};return}
   try {
     if(typeof GM_registerMenuCommand==="function") GM_registerMenuCommand("Buka Auto Seller",()=>{
       panel();
