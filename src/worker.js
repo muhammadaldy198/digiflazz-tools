@@ -962,11 +962,20 @@ async function autoSwitchBatch(env, requestedLimit) {
   const verified=await env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first();
   if(!verified) throw Error("Lakukan satu perpindahan seller manual yang berhasil sebelum menjalankan auto-switch.");
   const limit=Math.trunc(bounded(requestedLimit,1,10,cfg.autoSwitchBatchSize));
-  const attention=await loadAttentionRows(env,cfg,"WHERE p.active=1");
-  const targets=attention
-    .filter(x=>x.needs_attention&&!x.locked&&!["pending","unknown"].includes(str(x.operation_status)))
-    .sort((a,b)=>String(a.last_seen).localeCompare(String(b.last_seen)))
-    .slice(0,limit);
+  const rows=await env.DB.prepare(`SELECT p.sku,p.last_seen,a.reasons_json
+    FROM product_attention a
+    JOIN products p ON p.sku=a.sku
+    LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku
+    LEFT JOIN switch_operations op ON op.sku=p.sku
+    WHERE a.dirty=0 AND a.needs_attention=1 AND p.active=1
+      AND l.buyer_sku_code IS NULL
+      AND COALESCE(op.status,'') NOT IN ('pending','unknown')
+    ORDER BY p.last_seen ASC,p.sku ASC LIMIT ?`).bind(limit).all();
+  const targets=rows.results.map(row=>{
+    let attention_reasons=[];
+    try { attention_reasons=JSON.parse(row.reasons_json||"[]"); } catch {}
+    return {...row,attention_reasons};
+  });
   let switched=0,noCandidate=0,failed=0;
   const results=[];
   for(const target of targets) {
@@ -987,15 +996,18 @@ async function autoSwitchBatch(env, requestedLimit) {
         noCandidate++;
         await log(env,"INFO","auto-switch",top&&String(top.seller_id)===currentId?"Seller saat ini masih kandidat terbaik; tidak dipindahkan.":"Tidak ada kandidat seller yang memenuhi aturan.",sku);
         results.push({sku,status:"no_candidate"});
+        await markAttentionDirty(env,[sku]);
         continue;
       }
       const changed=await switchSeller(env,sku,best.seller_id,"auto",selection);
       switched++;
       results.push({sku,status:"switched",seller:changed.seller,price:changed.price});
+      await markAttentionDirty(env,[sku]);
     } catch(error) {
       failed++;
       await log(env,"WARN","auto-switch",error.message,sku);
       results.push({sku,status:"error",error:error.message});
+      await markAttentionDirty(env,[sku]);
     }
   }
   return {ok:true,examined:targets.length,switched,noCandidate,failed,remainingPossible:targets.length===limit,results};
