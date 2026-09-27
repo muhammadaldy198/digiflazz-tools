@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Digi Tools — Auto Select Seller
 // @namespace    https://tools.lfamiliastore.my.id/
-// @version      1.7.0
+// @version      1.8.0
 // @description  Pilih seller langsung di halaman produk Digiflazz. Sesi tetap di browser.
 // @match        https://member.digiflazz.com/*
 // @run-at       document-end
@@ -17,7 +17,7 @@
   "use strict";
   const testing=typeof module!=="undefined" && !!module.exports;
   const KEY = "digiTools.autoSeller.v1";
-  const DEFAULTS = {enabled:true,saveMode:"manual",minRating:4,minReviews:0,priceCap:0,priceTolerancePercent:2,autoFillMaxPrice:true,maxPriceOffset:0,autoServiceCode:true,preferred:"",blocked:""};
+  const DEFAULTS = {enabled:true,saveMode:"manual",minRating:4,minReviews:0,priceCap:0,priceTolerancePercent:2,autoServiceCode:true,preferred:"",blocked:""};
   const str = value => String(value ?? "").trim();
   const names = value => new Set(str(value).split(/[\n,]/).map(x=>x.trim().toLowerCase()).filter(Boolean));
   function reviewCount(value) {
@@ -36,11 +36,6 @@
     const value=Number(amount);
     if(!prefix || !Number.isSafeInteger(value) || value<1) return null;
     return prefix+String(value);
-  }
-  function maxPriceForSeller(price,offset) {
-    const base=Number(price),extra=Number(offset);
-    if(!Number.isSafeInteger(base)||base<1||!Number.isSafeInteger(extra)||extra<0||base+extra>1000000000) return null;
-    return base+extra;
   }
   function slaDays(value) {
     const text=str(value).replace(/\s+/g," ").trim();
@@ -116,14 +111,9 @@
     lastProduct=str(product.id);lastSeller=str(candidate.id);lastActionTime=Date.now();
     try {
       // Use Digiflazz's own Vue action, which fills all linked seller fields.
+      // Keep Digiflazz's per-product Max Price unchanged while selecting a seller.
       vm.autoUpdateMaxPrice=false;
       vm.selectSeller(candidate);
-      if(cfg.autoFillMaxPrice) {
-        const max=maxPriceForSeller(candidate.price,cfg.maxPriceOffset);
-        if(max==null){update("Seller terpilih, tetapi nilai max price tidak valid. Periksa sebelum menyimpan.");return}
-        product.max_price=max;
-        product.change=true;
-      }
       update("Dipilih: "+str(candidate.seller)+" · rating "+str(candidate.reviewAvg??"—")+" · SLA "+(slaDays(candidate.seller_details?.sla)<999?"H+"+slaDays(candidate.seller_details?.sla):"—")+" · Rp"+Number(candidate.price).toLocaleString("id-ID")+(cfg.saveMode==="auto"?" · menyimpan…":" · tekan Simpan di Digiflazz"));
       if(cfg.saveMode==="auto") {
         if(typeof vm.editProduct!=="function") {update("Seller terpilih. Tombol simpan otomatis tidak ditemukan; tekan Simpan di Digiflazz.");return}
@@ -280,16 +270,14 @@
       <div class="row"><label for="rating">Rating minimal<input id="rating" type="number" min="4" max="5" step="0.1"></label><label for="reviews">Ulasan minimal<input id="reviews" type="number" min="0"></label></div>
       <label for="tolerance">Toleransi harga (%)</label><input id="tolerance" type="number" min="0" max="20" step="0.1">
       <p>Seller dalam toleransi dari harga termurah dibandingkan lagi berdasarkan rating, ulasan, lalu harga.</p>
-      <label for="cap">Batas harga global (Rp; 0 = ikut max produk)</label><input id="cap" type="number" min="0">
-      <label><input id="fill" type="checkbox"> Isi max price saat seller terpilih</label>
-      <label for="offset">Tambahan max price untuk semua produk (Rp)</label><input id="offset" type="number" min="0" placeholder="1000">
-      <p>Contoh harga seller Rp15.000 + tambahan Rp1.000 = max price Rp16.000.</p>
+      <label for="cap">Batas kandidat seller global (Rp; 0 = hanya Max Price produk)</label><input id="cap" type="number" min="0">
+      <p>Max Price tidak diubah oleh skrip. Batas utama tetap Max Price masing-masing produk di Digiflazz.</p>
       <label><input id="code" type="checkbox"> Buat SKU otomatis untuk semua produk</label>
       <p><strong>Tidak perlu isi SKU satu-satu.</strong> Saat form produk muncul dan nama game + nominal terbaca, kode langsung dibuat: Mobile Legends 5 Diamond → ML5, Free Fire 1000 Diamond → FF1000.</p>
       <button id="fill-all-codes" type="button">⚡ Isi semua SKU di halaman</button>
       <label for="preferred">Seller prioritas (pisah koma)</label><textarea id="preferred"></textarea>
       <label for="blocked">Seller diblokir (pisah koma)</label><textarea id="blocked"></textarea>
-      <div id="status" class="status" role="status">Auto Seller v1.7 aktif. Tombol Digiflazz tidak diubah; pilih seller tetap bisa ditekan.</div>
+      <div id="status" class="status" role="status">Auto Seller v1.8 aktif. Tombol Digiflazz tidak diubah; pilih seller tetap bisa ditekan.</div>
     </div><button class="bubble" id="toggle" aria-label="Buka pengaturan auto seller">⚡ Auto Seller</button>`;
     const get=id=>ui.getElementById(id);
     get("enabled").checked=settings.enabled;
@@ -298,8 +286,6 @@
     get("reviews").value=settings.minReviews;
     get("tolerance").value=settings.priceTolerancePercent;
     get("cap").value=settings.priceCap;
-    get("fill").checked=settings.autoFillMaxPrice;
-    get("offset").value=settings.maxPriceOffset;
     get("code").checked=settings.autoServiceCode;
     get("preferred").value=settings.preferred;
     get("blocked").value=settings.blocked;
@@ -307,7 +293,7 @@
     get("toggle").onclick=()=>get("box").classList.toggle("open");
     get("fill-all-codes").onclick=()=>fillAllCodes(true);
     ui.addEventListener("change",()=>{
-      settings={enabled:get("enabled").checked,saveMode:get("mode").value,minRating:Math.min(5,Math.max(4,Number(get("rating").value)||4)),minReviews:Math.max(0,Number(get("reviews").value)||0),priceTolerancePercent:Math.min(20,Math.max(0,Number(get("tolerance").value)||0)),priceCap:Math.max(0,Number(get("cap").value)||0),autoFillMaxPrice:get("fill").checked,maxPriceOffset:Math.min(1000000000,Math.max(0,Math.trunc(Number(get("offset").value)||0))),autoServiceCode:get("code").checked,preferred:get("preferred").value,blocked:get("blocked").value};
+      settings={enabled:get("enabled").checked,saveMode:get("mode").value,minRating:Math.min(5,Math.max(4,Number(get("rating").value)||4)),minReviews:Math.max(0,Number(get("reviews").value)||0),priceTolerancePercent:Math.min(20,Math.max(0,Number(get("tolerance").value)||0)),priceCap:Math.max(0,Number(get("cap").value)||0),autoServiceCode:get("code").checked,preferred:get("preferred").value,blocked:get("blocked").value};
       localStorage.setItem(KEY,JSON.stringify(settings));update("Pengaturan tersimpan di browser ini.");
     });
     (document.documentElement||document.body).append(host);
@@ -330,7 +316,7 @@
     },true);
     setInterval(scanVue,900);
   }
-  if(testing) {module.exports={chooseSeller,reviewCount,patch,serviceCode,maxPriceForSeller,slaDays,reviewValue};return}
+  if(testing) {module.exports={chooseSeller,reviewCount,patch,serviceCode,slaDays,reviewValue};return}
   try {
     if(typeof GM_registerMenuCommand==="function") GM_registerMenuCommand("Buka Auto Seller",()=>{
       panel();
