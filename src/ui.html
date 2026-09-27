@@ -98,7 +98,7 @@
     const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
     const rupiah=n=>"Rp"+Number(n||0).toLocaleString("id-ID");
     const fmt=s=>s?new Date(String(s).replace(" ","T")+"Z").toLocaleString("id-ID",{dateStyle:"short",timeStyle:"short"}):"—";
-    const state={view:"overview",bootstrap:null,page:1,q:"",status:"all",category:"",brand:"",selected:null,toastTimer:null,ruleTargets:null};
+    const state={view:"overview",bootstrap:null,page:1,q:"",status:"all",category:"",brand:"",selected:null,toastTimer:null,ruleTargets:null,historySku:"",historyStatus:"",historyReason:"",logLevel:"",logKind:"",logSku:"",logQ:""};
     const names={overview:["Ringkasan","Pantau katalog dan seller Digiflazz."],products:["Produk","Daftar SKU buyer dan status seller."],sellers:["Penjual","Pilih seller favorit, prioritas, atau blokir."],rules:["Aturan","Kriteria pemilihan seller untuk kategori, brand, dan produk."],zones:["Grup produk","Pisahkan supplier dengan aturan zona."],history:["Perubahan","Riwayat scan, harga, dan perpindahan seller."],logs:["Log sistem","Aktivitas terbaru dari pemindaian dan koneksi."],tools:["Alat input","Kode layanan dan Auto Seller."],settings:["Pengaturan","Atur pemindaian, penilaian, dan penyimpanan."],connection:["Koneksi","Periksa sesi Digiflazz yang sudah tersimpan."]};
     async function api(path,options={}) {
       const res=await fetch(path,{...options,headers:{"content-type":"application/json",...(options.headers||{})}});
@@ -126,7 +126,7 @@
       else message("");
       return d;
     }
-    function feed(rows) {return rows?.length?'<div class="feed">'+rows.map(x=>'<div class="feed-line"><span class="feed-time">'+fmt(x.created_at)+'</span><span class="feed-msg"><b class="pill '+esc(x.level)+'">'+esc(x.level)+'</b>'+esc(x.sku?x.sku+" · ":"")+esc(x.message)+'</span></div>').join("")+'</div>':'<div class="empty">Belum ada aktivitas.</div>'}
+    function feed(rows) {return rows?.length?'<div class="feed">'+rows.map(x=>'<div class="feed-line"><span class="feed-time">'+fmt(x.created_at)+'</span><span class="feed-msg"><b class="pill '+esc(x.level)+'">'+esc(x.level)+'</b>'+esc(x.kind?x.kind+" · ":"")+esc(x.sku?x.sku+" · ":"")+esc(x.message)+'</span></div>').join("")+'</div>':'<div class="empty">Belum ada aktivitas.</div>'}
     async function overview() {
       const d=await bootstrap(),scan=d.lastScan,issues=d.counts.issues;
       $("content").innerHTML=
@@ -228,12 +228,16 @@
       (d.assignments.length?'<div class="section"><h3>Penugasan aktif</h3>'+d.assignments.map(a=>'<div class="row"><div><span class="name">'+esc((a.brand?a.brand+" · ":"")+(a.product_name||a.sku))+'</span><span class="sku">'+esc(a.sku)+' → '+esc(a.zone_name)+'</span></div><button class="button tiny" data-action="unassign-zone" data-sku="'+esc(a.sku)+'">Lepas</button></div>').join("")+'</div>':'<div class="empty">Belum ada SKU yang dipasangkan ke zona.</div>')+'</section>';
     }
     async function history() {
-      const d=await api("/api/history");
-      $("content").innerHTML='<div class="grid two"><section class="card"><h2>Riwayat pemindaian</h2>'+(d.runs.length?d.runs.map(x=>'<div class="row"><div><span class="name">'+fmt(x.started_at)+' · '+esc(x.status)+'</span><span class="sku">'+esc(x.total)+' produk · '+esc(x.issues)+' masalah · '+esc(x.message||"")+'</span></div></div>').join(""):'<div class="empty">Belum ada pemindaian.</div>')+'</section><section class="card"><h2>Perubahan harga</h2>'+(d.prices.length?d.prices.map(x=>'<div class="row"><div><span class="name">'+esc(x.buyer_sku_code)+'</span><span class="sku">'+esc(x.seller_name||"—")+' · '+fmt(x.captured_at)+'</span></div><strong>'+rupiah(x.price)+'</strong></div>').join(""):'<div class="empty">Belum ada perubahan harga.</div>')+'</section></div><section class="section card"><h2>Perpindahan seller</h2>'+(d.switches.length?d.switches.map(x=>'<div class="row"><div><span class="name">'+esc(x.buyer_sku_code)+'</span><span class="sku">'+esc(x.from_seller)+' → '+esc(x.to_seller)+' · '+fmt(x.created_at)+'</span></div>'+badge(x.status)+'</div>').join(""):'<div class="empty">Belum ada perpindahan seller.</div>')+'</section>';
+      const params=new URLSearchParams({sku:state.historySku,status:state.historyStatus,reason:state.historyReason});
+      const d=await api("/api/history?"+params);
+      $("content").innerHTML='<div class="card"><div class="toolbar"><input id="history-sku" placeholder="Filter SKU" value="'+esc(state.historySku)+'"><select id="history-status"><option value="">Semua status</option>'+["success","pending","unknown","error"].map(x=>'<option value="'+x+'" '+(state.historyStatus===x?"selected":"")+'>'+x+'</option>').join("")+'</select><select id="history-reason"><option value="">Manual + otomatis</option><option value="manual" '+(state.historyReason==="manual"?"selected":"")+'>Manual</option><option value="auto" '+(state.historyReason==="auto"?"selected":"")+'>Otomatis</option></select>'+button("Terapkan","filter-history","primary")+button("Reset","reset-history","tiny")+'</div><p class="hint">Filter diterapkan di backend. Riwayat scan tetap ditampilkan sebagai konteks operasional.</p></div>'+
+      '<div class="section grid two"><section class="card"><h2>Riwayat pemindaian</h2>'+(d.runs.length?d.runs.map(x=>'<div class="row"><div><span class="name">'+fmt(x.started_at)+' · '+esc(x.status)+'</span><span class="sku">'+esc(x.total)+' produk · '+esc(x.issues)+' masalah · '+esc(x.message||"")+'</span></div>'+badge(x.status,x.status==="success"?"good":x.status==="error"?"bad":"warn")+'</div>').join(""):'<div class="empty">Belum ada pemindaian.</div>')+'</section><section class="card"><h2>Perubahan harga</h2>'+(d.prices.length?d.prices.map(x=>'<div class="row"><div><span class="name">'+esc(x.buyer_sku_code)+'</span><span class="sku">'+esc(x.seller_name||"—")+' · '+fmt(x.captured_at)+'</span></div><strong>'+rupiah(x.price)+'</strong></div>').join(""):'<div class="empty">Tidak ada perubahan harga sesuai filter.</div>')+'</section></div>'+
+      '<section class="section card"><h2>Perpindahan seller</h2>'+(d.switches.length?d.switches.map(x=>'<div class="row"><div><span class="name">'+esc(x.buyer_sku_code)+'</span><span class="sku">'+esc(x.from_seller||"—")+' → '+esc(x.to_seller||"—")+' · '+fmt(x.created_at)+'</span></div><div class="controls">'+badge(x.reason==="auto"?"Otomatis":"Manual",x.reason==="auto"?"":"good")+badge(x.status,x.status==="success"?"good":x.status==="error"?"bad":"warn")+'</div></div>').join(""):'<div class="empty">Tidak ada perpindahan seller sesuai filter.</div>')+'</section>';
     }
     async function logs() {
-      const d=await api("/api/events");
-      $("content").innerHTML='<div class="card"><div class="section-head"><h2>Aktivitas sistem</h2>'+button("Muat ulang","refresh-logs","tiny")+'</div>'+feed(d.events)+'</div>';
+      const params=new URLSearchParams({level:state.logLevel,kind:state.logKind,sku:state.logSku,q:state.logQ});
+      const d=await api("/api/events?"+params);
+      $("content").innerHTML='<div class="card"><div class="toolbar"><select id="log-level"><option value="">Semua level</option>'+["INFO","WARN","ERROR"].map(x=>'<option value="'+x+'" '+(state.logLevel===x?"selected":"")+'>'+x+'</option>').join("")+'</select><select id="log-kind"><option value="">Semua jenis</option>'+d.kinds.map(x=>'<option value="'+esc(x)+'" '+(state.logKind===x?"selected":"")+'>'+esc(x)+'</option>').join("")+'</select><input id="log-sku" placeholder="SKU" value="'+esc(state.logSku)+'"><input id="log-q" placeholder="Cari pesan" value="'+esc(state.logQ)+'">'+button("Terapkan","filter-logs","primary")+button("Reset","reset-logs","tiny")+'</div><div class="section-head"><h2>Aktivitas sistem</h2>'+button("Muat ulang","refresh-logs","tiny")+'</div>'+feed(d.events)+'</div>';
     }
     async function tools() {
       $("content").innerHTML='<div class="grid two"><section class="card"><h2>Kode layanan dari nama game</h2><div class="fields two"><div class="field"><label for="code-game">Nama game</label><input id="code-game" placeholder="Mobile Legends"></div><div class="field"><label for="code-product">Produk / nominal</label><input id="code-product" placeholder="5 Diamond"></div></div><div class="spread"><span id="code-result" class="code">—</span>'+button("Buat kode","generate","primary")+'</div><div class="controls" style="margin-top:16px">'+button("Salin kode","copy-code")+'</div><p class="hint">Contoh Mobile Legends 5 Diamond → ML5; Free Fire 1000 Diamond → FF1000. Kode yang sudah dipakai tidak dibuat ulang.</p></section>'+
@@ -358,7 +362,11 @@
       if(a==="delete-rule"){if(!confirm("Hapus aturan ini?"))return;await write("/api/rules/"+el.dataset.id,{},"DELETE");return render()}
       if(a==="delete-zone"){if(!confirm("Hapus zona dan seluruh penugasannya?"))return;await write("/api/zones/"+el.dataset.id,{},"DELETE");return render()}
       if(a==="unassign-zone"){await write("/api/zones/assign",{sku:el.dataset.sku,zone_id:null});toast("Zona dilepas dari "+el.dataset.sku+".");return render()}
-      if(a==="refresh-logs")return render();
+      if(a==="filter-history"){state.historySku=$("history-sku").value.trim();state.historyStatus=$("history-status").value;state.historyReason=$("history-reason").value;return render("history")}
+      if(a==="reset-history"){state.historySku="";state.historyStatus="";state.historyReason="";return render("history")}
+      if(a==="filter-logs"){state.logLevel=$("log-level").value;state.logKind=$("log-kind").value;state.logSku=$("log-sku").value.trim();state.logQ=$("log-q").value.trim();return render("logs")}
+      if(a==="reset-logs"){state.logLevel="";state.logKind="";state.logSku="";state.logQ="";return render("logs")}
+      if(a==="refresh-logs")return render("logs");
       if(a==="test-connection"){const d=await write("/api/connection/test");toast("Uji sesi: HTTP "+d.httpStatus+(d.connected?" · tersambung":" · gagal"),!d.connected);return render()}
       if(a==="discover"){toast("Membaca jalur dashboard Digiflazz…");const d=await write("/api/discover");toast(d.count+" jalur API ditemukan untuk pemeriksaan.");return}
       if(a==="generate"){
