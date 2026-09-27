@@ -907,18 +907,6 @@ async function deleteBuyerProduct(env,sku) {
   await log(env,"WARN","product-delete","Produk dihapus langsung dari Digiflazz.",sku);
   return {ok:true,sku,deleted:true,verified:true};
 }
-function serviceCode(game,product) {
-  const name=str(game).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
-  const title=str(product).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
-  const gameName=name||title.replace(/\d[\d.,]*.*$/,"").trim();
-  const aliases=[[/\bMOBILE\s+LEGENDS\b/,"ML"],[/\bFREE\s+FIRE\b/,"FF"],[/\bPUBG\s+MOBILE\b/,"PUBG"],[/\bCALL\s+OF\s+DUTY\s+MOBILE\b/,"CODM"]];
-  const prefix=aliases.find(([pattern])=>pattern.test(gameName))?.[1] || gameName.split(/[^A-Z0-9]+/).filter(x=>x && !["GAME","TOP","UP"].includes(x)).slice(0,4).map(x=>x[0]).join("");
-  const withoutGame=name&&title.startsWith(name)?title.slice(name.length):title;
-  const amount=withoutGame.match(/(?:^|[^A-Z0-9])(\d{1,3}(?:[.,]\d{3})+|\d+)(?=[^0-9]|$)/)?.[1]?.replace(/[.,]/g,"");
-  const value=Number(amount);
-  if(!prefix||!Number.isSafeInteger(value)||value<1)return null;
-  return prefix+String(value);
-}
 function changedProduct(current, choice) {
   const updated = { ...current };
   for (const [field, value] of Object.entries({
@@ -1087,32 +1075,6 @@ async function reconcile(env,sku) {
   await log(env,confirmed?"INFO":"WARN","reconcile",confirmed?"Perubahan terkonfirmasi di Digiflazz.":"Target tidak ditemukan pada data terbaru; periksa sebelum mengulang.",sku);
   return {ok:true,confirmed,status};
 }
-async function discover(env) {
-  const res = await remote(env,"/buyer-area",true);
-  const html = (await res.text()).slice(0,750000);
-  const scripts = [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map(x=>x[1]).filter(x=>!x.startsWith("//")).slice(0,12);
-  const found = new Set();
-  for (const m of html.matchAll(/\/api\/v1\/buyer\/[a-zA-Z0-9_/$?{}.:+-]+/g)) found.add(m[0].slice(0,200));
-  const title = (html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]||"").slice(0,100);
-  let responseKeys = [];
-  try { responseKeys = Object.keys(JSON.parse(html)); } catch {}
-  const summary = { title, htmlBytes:html.length,contentType:res.headers.get("content-type"), responseKeys, scripts:scripts.map(s=>{try{return new URL(s,"https://member.digiflazz.com").pathname}catch{return s}}).slice(0,12) };
-  await env.DB.prepare("INSERT INTO app_settings(key,value) VALUES('discovery_summary',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(summary)).run();
-  for (const src of scripts) {
-    let target;
-    try { target = new URL(src,"https://member.digiflazz.com"); hostUrl(target.toString()); } catch { continue; }
-    try {
-      const r = await remote(env,target.pathname+target.search);
-      if (!/javascript|text\/plain/.test(r.headers.get("content-type")||"")) continue;
-      const text = (await r.text()).slice(0,1500000);
-      for (const m of text.matchAll(/\/api\/v1\/buyer\/[a-zA-Z0-9_/$?{}.:+-]+/g)) found.add(m[0].slice(0,200));
-    } catch {}
-  }
-  const paths = [...found].slice(0,300);
-  for (const path of paths) await env.DB.prepare("INSERT INTO api_discovery(route,source_url,context) VALUES(?,?,?) ON CONFLICT(route) DO NOTHING").bind(path,"https://member.digiflazz.com/buyer-area","script reference").run();
-  await log(env,"INFO","discovery",paths.length+" jalur API ditemukan; halaman "+(title||"(tanpa judul)")+", "+scripts.length+" skrip.");
-  return {ok:true,count:paths.length,paths,summary};
-}
 async function canonicalRuleTarget(env, scopeType, value) {
   if(scopeType==="global") return "";
   const raw=str(value);
@@ -1150,33 +1112,33 @@ async function api(req, env, url) {
     }
     if (method==="POST" && path==="/api/connection") {
       if (!env.SESSION_ENCRYPTION_KEY) return failure("Secret enkripsi belum terpasang.",503);
-      const body=await getJson(req), data=parseCurl(body.curl), sealed=await seal(data,env.SESSION_ENCRYPTION_KEY);
-      await env.DB.prepare("INSERT INTO digiflazz_connections(id,encrypted_payload,iv,source_host) VALUES(1,?,?,'member.digiflazz.com') ON CONFLICT(id) DO UPDATE SET encrypted_payload=excluded.encrypted_payload,iv=excluded.iv,last_test_status=NULL,last_test_at=NULL,updated_at=CURRENT_TIMESTAMP").bind(sealed.encrypted,sealed.iv).run();
-      await log(env,"INFO","connection","Sesi Digiflazz diperbarui.");
-      return reply({ok:true,saved:true});
+      const body=await getJson(req),data=parseCurl(body.curl),target=hostUrl(data.url);
+      const test=await fetch(target,{method:data.method,headers:data.headers,redirect:"manual",signal:AbortSignal.timeout(20000)});
+      if(test.status<200||test.status>=300) throw Error("cURL tidak disimpan karena sesi Digiflazz gagal diuji (HTTP "+test.status+").");
+      const sealed=await seal(data,env.SESSION_ENCRYPTION_KEY);
+      await env.DB.prepare("INSERT INTO digiflazz_connections(id,encrypted_payload,iv,source_host,last_test_status,last_test_at) VALUES(1,?,?,'member.digiflazz.com',?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET encrypted_payload=excluded.encrypted_payload,iv=excluded.iv,source_host=excluded.source_host,last_test_status=excluded.last_test_status,last_test_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP").bind(sealed.encrypted,sealed.iv,test.status).run();
+      await log(env,"INFO","connection","Sesi Digiflazz diuji dan diperbarui (HTTP "+test.status+").");
+      return reply({ok:true,saved:true,connected:true,httpStatus:test.status});
     }
     if (method==="POST" && path==="/api/connection/test") {
       const c=await conn(env); if (!c) return failure("Belum ada sesi.",404);
-      const data=await unseal(c,env.SESSION_ENCRYPTION_KEY);
-      const target=hostUrl(data.url);
+      if (!env.SESSION_ENCRYPTION_KEY) return failure("Secret enkripsi belum terpasang.",503);
+      const data=await unseal(c,env.SESSION_ENCRYPTION_KEY),target=hostUrl(data.url);
       const res=await fetch(target,{method:data.method,headers:data.headers,redirect:"manual",signal:AbortSignal.timeout(20000)});
       const good=res.status>=200&&res.status<300;
       await env.DB.prepare("UPDATE digiflazz_connections SET last_test_status=?,last_test_at=CURRENT_TIMESTAMP WHERE id=1").bind(res.status).run();
+      await log(env,good?"INFO":"WARN","connection-test","Uji sesi Digiflazz HTTP "+res.status+".");
       return reply({ok:true,connected:good,httpStatus:res.status});
     }
     if (method==="DELETE" && path==="/api/connection") {
       await env.DB.prepare("DELETE FROM digiflazz_connections WHERE id=1").run();
+      await log(env,"WARN","connection","Sesi Digiflazz diputus dari tools.");
       return reply({ok:true,disconnected:true});
     }
     if (method==="POST" && path==="/api/scan") return reply(await scan(env));
     if (method==="POST" && path==="/api/automation/run") {
       const body=await getJson(req);
       return reply(await autoSwitchBatch(env,body.limit));
-    }
-    if (method==="POST" && path==="/api/discover") return reply(await discover(env));
-    if (method==="GET" && path==="/api/discover") {
-      const rows=await env.DB.prepare("SELECT route FROM api_discovery ORDER BY route LIMIT 300").all();
-      return reply({ok:true,routes:rows.results});
     }
     if (method==="GET" && path==="/api/products") {
       const page=Math.trunc(bounded(url.searchParams.get("page"),1,100000,1));
@@ -1408,6 +1370,21 @@ async function api(req, env, url) {
       ]);
       return reply({ok:true,prices:prices.results,switches:switches.results,runs:runs.results});
     }
+    if(method==="GET"&&path==="/api/browser-config") {
+      const cfg=await settings(env),prefs=await env.DB.prepare("SELECT seller_name,mode FROM seller_preferences ORDER BY seller_name COLLATE NOCASE").all();
+      return reply({
+        ok:true,
+        version:1,
+        generatedAt:new Date().toISOString(),
+        config:{
+          minRating:cfg.minRating,
+          minReviews:cfg.minReviews,
+          priceTolerancePercent:cfg.priceTolerancePercent,
+          preferred:prefs.results.filter(x=>x.mode==="preferred").map(x=>x.seller_name),
+          blocked:prefs.results.filter(x=>x.mode==="blocked").map(x=>x.seller_name)
+        }
+      });
+    }
     if(method==="GET"&&path==="/api/settings")return reply({ok:true,settings:await settings(env)});
     if(method==="POST"&&path==="/api/settings") {
       const current=await settings(env),next=validateSettings(await getJson(req),current);
@@ -1420,17 +1397,12 @@ async function api(req, env, url) {
       await markAttentionDirty(env);
       return reply({ok:true,settings:next});
     }
-    if(method==="POST"&&path==="/api/service-code") {
-      const body=await getJson(req),code=serviceCode(body.game,body.product);
-      if(!code) throw Error("Isi nama game dan jumlah nominal angka, misalnya Mobile Legends dan 5 Diamond.");
-      return reply({ok:true,code,available:!await env.DB.prepare("SELECT sku FROM products WHERE sku=?").bind(code).first()});
-    }
     return failure("Halaman API tidak ditemukan.",404);
   } catch(error) {
     return failure(error, /sesi|Digiflazz mengembalikan|format katalog|tidak mengembalikan/i.test(error.message)?502:400);
   }
 }
-export { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct };
+export { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct };
 export default {
   async fetch(req,env) {
     const url=new URL(req.url);
@@ -1467,12 +1439,5 @@ export default {
         return;
       }
 
-
-      const known=await env.DB.prepare("SELECT count(*) total FROM api_discovery").first();
-      const previous=await env.DB.prepare("SELECT value FROM app_settings WHERE key='discovery_last_attempt'").first();
-      if(known.total===0&&await conn(env)&&(!previous||Date.now()-Date.parse(previous.value)>86400000)) {
-        await env.DB.prepare("INSERT INTO app_settings(key,value) VALUES('discovery_last_attempt',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(new Date().toISOString()).run();
-        await discover(env);
-      }
     } catch(error) { try { await log(env,"ERROR","cron",error.message); } catch {} }
   }};
