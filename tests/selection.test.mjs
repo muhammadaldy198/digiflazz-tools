@@ -398,3 +398,17 @@ test("all D1 SKU IN-list batches stay at or below the verified 75-bind boundary"
   assert.doesNotMatch(source,/products\.length;i\+=100/);
   assert.doesNotMatch(source,/stale\.results\.length;i\+=80/);
 });
+
+
+test("auto-fill Max Price always uses selected seller price plus global offset",()=>{
+  assert.match(source,/changedProduct\(current,choice,!config\.autoFillMaxPrice,config\.maxPriceOffset,false\)/);
+  const current={max_price:25000,seller_sku_id:"old"};
+  const candidate={id:"new",seller:"Seller",price:15000};
+  assert.equal(changedProduct(current,candidate,false,1000,false).max_price,16000);
+});
+
+test("product detail exposes Max Price policy and lock has explicit manual semantics",()=>{
+  assert.match(source,/maxPricePolicy:\{autoFill:!!d\.config\.autoFillMaxPrice,offset:Number\(d\.config\.maxPriceOffset\)\|\|0\}/);
+  assert.match(source,/str\(body\.reason\)\|\|"manual"/);
+  assert.match(source,/kind|automation-lock/);
+});

@@ -941,7 +941,7 @@ async function switchSeller(env, sku, sellerId, reason, preparedSelection = null
   try {
     // Set before the network call: a lost response may still mean Digiflazz saved the change.
     sent=true;
-    await remoteSave(env,changedProduct(current,choice,config.preserveMaxPrice && !config.autoFillMaxPrice,config.maxPriceOffset,config.preserveMaxPrice && config.autoFillMaxPrice));
+    await remoteSave(env,changedProduct(current,choice,!config.autoFillMaxPrice,config.maxPriceOffset,false));
     const verified=await freshProduct(env,sku);
     if (String(verified.seller_sku_id)!==sellerId) throw Error("Respons simpan diterima, tetapi seller baru belum terkonfirmasi.");
     const normalizedVerified=normalizeProduct(verified);
@@ -1195,7 +1195,7 @@ async function api(req, env, url) {
         const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:d.options.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config,new Date(),{ranked:d.options,current,best});
         const cached={...d.product,operation_status:op?.status,current_rating:current?.rating??null,current_sla:current?.sla??null,option_count:d.options.length,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:best?.seller_name||null,best_candidate_price:best?.price??null,best_candidate_rating:best?.rating??null,best_candidate_sla:best?.sla_days??null};
         await persistAttentionRows(env,[cached]);
-        return {ok:true,product:{...cached,raw:undefined,current_seller_sku_id:currentId},operation:op,options:d.options.map(({raw,...option})=>option),connectorReady};
+        return {ok:true,product:{...cached,raw:undefined,current_seller_sku_id:currentId},operation:op,options:d.options.map(({raw,...option})=>option),connectorReady,maxPricePolicy:{autoFill:!!d.config.autoFillMaxPrice,offset:Number(d.config.maxPriceOffset)||0}};
       };
       try { return reply(await shape(await rankedOptions(env,sku),true)); }
       catch(error) { await log(env,"WARN","seller-options",error.message,sku); }
@@ -1203,11 +1203,12 @@ async function api(req, env, url) {
     }
     const lock=path.match(/^\/api\/products\/([^/]+)\/lock$/);
     if(method==="POST"&&lock) {
-      const sku=decodeURIComponent(lock[1]),body=await getJson(req);
-      if(bool(body.locked)) await env.DB.prepare("INSERT INTO product_locks(buyer_sku_code,reason) VALUES(?,?) ON CONFLICT(buyer_sku_code) DO UPDATE SET reason=excluded.reason").bind(sku,str(body.reason)).run();
+      const sku=decodeURIComponent(lock[1]),body=await getJson(req),locked=bool(body.locked);
+      if(locked) await env.DB.prepare("INSERT INTO product_locks(buyer_sku_code,reason) VALUES(?,?) ON CONFLICT(buyer_sku_code) DO UPDATE SET reason=excluded.reason").bind(sku,str(body.reason)||"manual").run();
       else await env.DB.prepare("DELETE FROM product_locks WHERE buyer_sku_code=?").bind(sku).run();
       await markAttentionDirty(env,[sku]);
-      return reply({ok:true,locked:bool(body.locked)});
+      await log(env,"INFO","automation-lock",locked?"Auto Switch dikunci untuk produk ini. Aksi manual tetap diperbolehkan.":"Kunci Auto Switch dibuka.",sku);
+      return reply({ok:true,locked});
     }
     const change=path.match(/^\/api\/products\/([^/]+)\/switch$/);
     if(method==="POST"&&change) {
