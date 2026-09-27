@@ -152,7 +152,7 @@
               button(d.settings.autoSwitch&&!d.settings.dryRun?"Matikan Auto Switch":"2. Aktifkan Auto Switch","toggle-auto",d.liveSwitchAvailable?"primary":"")+
               button("3. Jalankan Auto Switch Sekarang","run-auto",d.settings.autoSwitch&&!d.settings.dryRun?"primary":"")+
             '</div>'+
-            '<p class="hint"><strong>Prioritas Auto Switch: rating minimal 4 → SLA tercepat → kelompok harga maksimal '+esc(d.settings.priceTolerancePercent)+'% dari termurah → rating tertinggi → ulasan terbanyak → harga termurah.</strong> Jenis koneksi IP/API/H2H tidak ikut menentukan.</p>'+
+            '<p class="hint"><strong>Prioritas Auto Switch: rating minimal 4 → SLA tercepat → kelompok harga maksimal '+esc(d.settings.priceTolerancePercent)+'% dari termurah → rating tertinggi → ulasan terbanyak → harga termurah.</strong> Jenis koneksi IP/API/H2H tidak ikut menentukan. Auto Switch hanya memasukkan SKU yang punya kandidat pengganti yang layak; masalah tanpa kandidat tetap terlihat di Perlu perhatian tanpa menghabiskan batch otomatis.</p>'+
           '</div>'+
         '</section>'+
         '<section class="section card"><div class="section-head"><h2>Aktivitas terbaru</h2>'+button("Semua log","goto-logs","tiny")+'</div>'+feed(d.events)+'</section>';

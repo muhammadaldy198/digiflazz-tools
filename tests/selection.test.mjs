@@ -368,9 +368,12 @@ test("materialized attention cache avoids full seller fanout on overview",()=>{
   assert.match(source,/conn\(env\),attentionSummary\(env\)/);
 });
 
-test("auto-switch reads only fresh cached attention targets",()=>{
+test("auto-switch reads only fresh actionable cached attention targets",()=>{
   assert.match(source,/WHERE a\.dirty=0 AND a\.needs_attention=1 AND p\.active=1/);
+  assert.match(source,/a\.best_candidate_seller IS NOT NULL/);
   assert.match(source,/COALESCE\(op\.status,''\) NOT IN \('pending','unknown'\)/);
+  assert.match(source,/NOT EXISTS \(\s*SELECT 1 FROM switch_history sh/);
+  assert.match(source,/sh\.status='success' AND sh\.created_at>\?/);
 });
 
 test("rule preference zone and settings changes invalidate materialized attention",()=>{
@@ -575,4 +578,24 @@ test("manual API discovery and one-off service-code API are removed",()=>{
 test("disconnecting a Digiflazz session is explicit and logged",()=>{
   assert.match(source,/method==="DELETE" && path==="\/api\/connection"/);
   assert.match(source,/Sesi Digiflazz diputus dari tools/);
+});
+
+
+test("attention materialization excludes a recently rejected seller target",()=>{
+  assert.match(source,/op\.target_seller_id AS operation_target_seller_id/);
+  assert.match(source,/op\.started_at AS operation_started_at/);
+  assert.match(source,/Date\.now\(\)-rejectedAt<6\*3600000/);
+  assert.match(source,/policyOptions=rejectedId\?options\.filter/);
+});
+
+test("materialized best candidate means an actual replacement seller",()=>{
+  assert.match(source,/replacement=ranked\.find\(x=>x\.eligible&&String\(x\.seller_id\)!==String\(row\.current_seller_sku_id\)\)/);
+  assert.match(source,/best_candidate_seller:replacement\?\.seller_name/);
+  assert.match(source,/best_candidate_price:replacement\?\.price/);
+});
+
+test("product detail materialization uses the same rejected-target and replacement policy",()=>{
+  assert.match(source,/SELECT status,target_seller_id,started_at FROM switch_operations WHERE sku=\?/);
+  assert.match(source,/const policyOptions=rejectedId\?d\.options\.filter/);
+  assert.match(source,/const replacement=policyOptions\.find\(x=>x\.eligible&&String\(x\.seller_id\)!==currentId\)/);
 });
