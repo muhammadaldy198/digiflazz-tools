@@ -478,11 +478,12 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
       cur.rating AS current_rating,
       cur.sla AS current_sla,
       json_extract(cur.raw,'$.rating_qty') AS current_review_count,
-      (SELECT count(*) FROM seller_options all_options WHERE all_options.sku=p.sku) AS option_count
+      COALESCE(option_counts.option_count,0) AS option_count
     FROM products p
     LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku
     LEFT JOIN switch_operations op ON op.sku=p.sku
     LEFT JOIN seller_options cur ON cur.sku=p.sku AND cur.seller_id=json_extract(p.raw,'$.seller_sku_id')
+    LEFT JOIN (SELECT sku,count(*) AS option_count FROM seller_options GROUP BY sku) option_counts ON option_counts.sku=p.sku
     `+where+`
     ORDER BY CASE WHEN p.price<=0 THEN 1 ELSE 0 END,p.price ASC,p.name COLLATE NOCASE ASC,p.sku ASC
   `).bind(...args).all();
@@ -706,14 +707,23 @@ async function autoSwitchBatch(env, requestedLimit) {
     .slice(0,limit);
   let switched=0,noCandidate=0,failed=0;
   const results=[];
-  for(const {sku} of targets) {
+  for(const target of targets) {
+    const sku=target.sku;
     try {
       const selection=await rankedOptions(env,sku);
-      const current=JSON.parse(selection.product.raw);
-      const best=selection.options.find(o=>o.eligible && o.seller_id!==String(current.seller_sku_id));
+      const current=JSON.parse(selection.product.raw),currentId=String(current.seller_sku_id??"");
+      const top=selection.options.find(o=>o.eligible);
+      const hardIssue=target.attention_reasons.some(reason=>[
+        "Seller belum dipilih","Seller OFF","Harga di atas max price","Stok habis","Sedang cut-off"
+      ].includes(reason));
+      const best=top&&String(top.seller_id)!==currentId
+        ? top
+        : hardIssue
+          ? selection.options.find(o=>o.eligible&&String(o.seller_id)!==currentId)
+          : null;
       if(!best) {
         noCandidate++;
-        await log(env,"WARN","auto-switch","Tidak ada kandidat seller yang memenuhi aturan.",sku);
+        await log(env,"INFO","auto-switch",top&&String(top.seller_id)===currentId?"Seller saat ini masih kandidat terbaik; tidak dipindahkan.":"Tidak ada kandidat seller yang memenuhi aturan.",sku);
         results.push({sku,status:"no_candidate"});
         continue;
       }
