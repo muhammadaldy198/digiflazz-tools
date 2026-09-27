@@ -19,11 +19,13 @@ test("seller filtering rejects blocked, expensive, and out of stock candidates",
   assert.ok(result.find(x => x.seller_name === "Costly").reasons.includes("Harga di atas batas"));
 });
 
-test("settings validate opt-in live switching", () => {
+test("settings validate opt-in live switching and ignore removed global Max Price keys", () => {
   const current = { autoSwitch: false, dryRun: true };
-  assert.deepEqual([validateSettings({ autoSwitch: true, dryRun: false }, current).autoSwitch,validateSettings({ autoSwitch: true, dryRun: false }, current).dryRun],[true,false]);
-  assert.equal(validateSettings({maxPriceOffset:1000},current).maxPriceOffset,1000);
-  assert.throws(()=>validateSettings({maxPriceOffset:1000.5},current),/bulat/);
+  const next=validateSettings({ autoSwitch: true, dryRun: false, maxPriceOffset:1000, autoFillMaxPrice:true, preserveMaxPrice:false }, current);
+  assert.deepEqual([next.autoSwitch,next.dryRun],[true,false]);
+  assert.equal("maxPriceOffset" in next,false);
+  assert.equal("autoFillMaxPrice" in next,false);
+  assert.equal("preserveMaxPrice" in next,false);
 });
 
 test("seller selection requires known rating, review count, and active status", () => {
@@ -48,14 +50,12 @@ test("catalog normalization handles official buyer SKU fields", () => {
 test("switch saves exact Digiflazz seller fields and preserves unrelated product data", () => {
   const current={id:7,code:"ML86",note:"keep",max_price:19000,seller_sku_id:"old"};
   const candidate={id:"sku42",id_int:42,seller:"Shop",connectionType:"jabber",seller_sku_code:"ML86S",deskripsi:"Diamond",price:17000,stock:4,unlimited_stock:0,seller_details:{sla:"H+0"},status_sellerSku:1};
-  const result=changedProduct(current,candidate,true);
+  const result=changedProduct(current,candidate);
   assert.equal(result.note,"keep");
   assert.equal(result.seller_sku_id,"sku42");
   assert.equal(result.seller_sku_id_int,42);
   assert.equal(result.max_price,19000);
   assert.equal(result.multi,false);
-  assert.equal(changedProduct(current,candidate,false).max_price,17000);
-  assert.equal(changedProduct(current,candidate,false,1000).max_price,18000);
   assert.equal(current.seller_sku_id,"old");
 });
 
@@ -67,12 +67,16 @@ test("service codes are deterministic and use game initials",()=>{
 });
 
 
-test("unhealthy products can choose a replacement above the stale product max price and tolerate unknown optional fields",()=>{
+test("per-product Max Price remains authoritative even when current seller is unhealthy",()=>{
   const product={seller_name:"Old",seller_active:0,price:10000,max_price:10100,stock:1,unlimited_stock:0};
-  const config={minRating:0,minReviews:0,priceCap:0,weights:{price:40,connection:30,sla:20,stock:10}};
-  const rows=[{seller_name:"Replacement",seller_id:"new",price:10200,rating:4.8,stock:null,seller_status:null,connection:"IP",sla:"H+0"}];
+  const config={minRating:0,minReviews:0,priceCap:0,priceTolerancePercent:2,weights:{price:40,connection:30,sla:20,stock:10}};
+  const rows=[
+    {seller_name:"Over Max",seller_id:"over",price:10200,rating:4.8,stock:null,seller_status:1,connection:"IP",sla:"H+0"},
+    {seller_name:"Within Max",seller_id:"ok",price:10050,rating:4.8,stock:null,seller_status:1,connection:"IP",sla:"H+0"}
+  ];
   const result=rank(product,rows,[],null,config,null);
-  assert.equal(result[0].eligible,true);
+  assert.equal(result.find(x=>x.seller_id==="over").eligible,false);
+  assert.equal(result.find(x=>x.seller_id==="ok").eligible,true);
 });
 
 
@@ -400,17 +404,19 @@ test("all D1 SKU IN-list batches stay at or below the verified 75-bind boundary"
 });
 
 
-test("auto-fill Max Price always uses selected seller price plus global offset",()=>{
-  assert.match(source,/changedProduct\(current,choice,!config\.autoFillMaxPrice,config\.maxPriceOffset,false\)/);
+test("seller switching never recalculates per-product Max Price",()=>{
+  assert.match(source,/changedProduct\(current,choice\)/);
+  assert.doesNotMatch(source,/config\.autoFillMaxPrice/);
+  assert.doesNotMatch(source,/config\.maxPriceOffset/);
   const current={max_price:25000,seller_sku_id:"old"};
   const candidate={id:"new",seller:"Seller",price:15000};
-  assert.equal(changedProduct(current,candidate,false,1000,false).max_price,16000);
+  assert.equal(changedProduct(current,candidate).max_price,25000);
 });
 
-test("product detail exposes Max Price policy and lock has explicit manual semantics",()=>{
-  assert.match(source,/maxPricePolicy:\{autoFill:!!d\.config\.autoFillMaxPrice,offset:Number\(d\.config\.maxPriceOffset\)\|\|0\}/);
+test("product detail has no global Max Price policy and lock keeps manual semantics",()=>{
+  assert.doesNotMatch(source,/maxPricePolicy:/);
   assert.match(source,/str\(body\.reason\)\|\|"manual"/);
-  assert.match(source,/kind|automation-lock/);
+  assert.match(source,/automation-lock/);
 });
 
 
@@ -421,4 +427,10 @@ test("auto-switch refreshes attention cache immediately after a successful switc
 test("auto-switch no-candidate path does not dirty unchanged attention cache",()=>{
   const block=source.slice(source.indexOf('if\(!best\) {'),source.indexOf('const changed=await switchSeller',source.indexOf('if\(!best\) {')));
   assert.doesNotMatch(block,/markAttentionDirty/);
+});
+
+
+test("removed global Max Price settings are absent from defaults",()=>{
+  const defaultsBlock=source.slice(source.indexOf("const DEFAULTS"),source.indexOf("const secureHeaders"));
+  assert.doesNotMatch(defaultsBlock,/maxPriceOffset|autoFillMaxPrice|preserveMaxPrice/);
 });
