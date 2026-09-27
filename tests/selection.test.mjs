@@ -512,3 +512,22 @@ test("history API filters seller switches by SKU status and reason",()=>{
   assert.match(source,/switchWhere\+=" AND reason=\?"/);
   assert.match(source,/reason,status,created_at FROM switch_history/);
 });
+
+
+test("definitive Digiflazz 4xx rejection is recorded as error, not unknown",()=>{
+  assert.match(source,/error\.definitive=res\.status>=400&&res\.status<500/);
+  assert.match(source,/const status=error\?\.definitive===true\?"error":sent\?"unknown":"error"/);
+  assert.match(source,/Penolakan terkonfirmasi/);
+});
+
+test("auto switch temporarily excludes a recently rejected seller target",()=>{
+  assert.match(source,/status='error' AND started_at > datetime\('now','-6 hours'\)/);
+  assert.match(source,/eligibleOptions=selection\.options\.filter/);
+  assert.match(source,/eligibleOptions=selection\.options\.filter/);
+  assert.ok(source.includes("String(o.seller_id)!==rejectedId"));
+});
+
+test("remote save surfaces a bounded Digiflazz rejection detail",()=>{
+  assert.match(source,/detail\.slice\(0,160\)/);
+  assert.match(source,/Digiflazz menolak perubahan produk \(HTTP /);
+});
