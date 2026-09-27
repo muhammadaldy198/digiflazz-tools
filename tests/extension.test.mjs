@@ -157,7 +157,7 @@ test("userscript uses only per-product Max Price as seller price ceiling",()=>{
   assert.doesNotMatch(source,/priceCap/);
   assert.doesNotMatch(source,/id="cap"/);
   assert.match(source,/const cap=Number\(product\?\.max_price\)>0\?Number\(product\.max_price\):Infinity/);
-  assert.match(source,/Satu-satunya batas harga adalah Max Price produk di Digiflazz/);
+  assert.match(source,/Batas harga absolut tetap Max Price produk Digiflazz/);
 });
 
 
