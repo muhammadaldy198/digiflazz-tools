@@ -610,6 +610,116 @@ function attentionBreakdown(rows) {
   }
   return out;
 }
+
+function attentionFlags(reasons) {
+  const categories=new Set((reasons||[]).map(attentionCategory));
+  return {
+    operational:categories.has("operasional")?1:0,
+    quality:categories.has("kualitas")?1:0,
+    price:categories.has("harga")?1:0,
+    pending:categories.has("tertunda")?1:0
+  };
+}
+async function persistAttentionRows(env, rows) {
+  if(!rows?.length)return 0;
+  const statements=[];
+  for(const row of rows) {
+    const flags=attentionFlags(row.attention_reasons);
+    statements.push(
+      env.DB.prepare(`INSERT INTO product_attention(
+        sku,needs_attention,reasons_json,operational_issue,quality_issue,price_issue,pending_issue,
+        current_rating,current_sla,best_candidate_seller,best_candidate_price,best_candidate_rating,best_candidate_sla,
+        option_count,locked,operation_status,dirty,evaluated_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      ON CONFLICT(sku) DO UPDATE SET
+        needs_attention=excluded.needs_attention,reasons_json=excluded.reasons_json,
+        operational_issue=excluded.operational_issue,quality_issue=excluded.quality_issue,price_issue=excluded.price_issue,pending_issue=excluded.pending_issue,
+        current_rating=excluded.current_rating,current_sla=excluded.current_sla,
+        best_candidate_seller=excluded.best_candidate_seller,best_candidate_price=excluded.best_candidate_price,
+        best_candidate_rating=excluded.best_candidate_rating,best_candidate_sla=excluded.best_candidate_sla,
+        option_count=excluded.option_count,locked=excluded.locked,operation_status=excluded.operation_status,
+        dirty=0,evaluated_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP`)
+      .bind(
+        row.sku,row.needs_attention?1:0,JSON.stringify(row.attention_reasons||[]),
+        flags.operational,flags.quality,flags.price,flags.pending,
+        row.current_rating??null,row.current_sla??null,row.best_candidate_seller??null,row.best_candidate_price??null,
+        row.best_candidate_rating??null,row.best_candidate_sla??null,
+        Number(row.option_count)||0,Number(row.locked)||0,str(row.operation_status)||null
+      )
+    );
+    statements.push(env.DB.prepare("UPDATE products SET nominal_value=? WHERE sku=?").bind(
+      Number.isFinite(Number(row.nominal_value))&&Number(row.nominal_value)<Infinity?Number(row.nominal_value):null,row.sku
+    ));
+  }
+  for(let i=0;i<statements.length;i+=80)await env.DB.batch(statements.slice(i,i+80));
+  return rows.length;
+}
+async function markAttentionDirty(env, skus=null) {
+  if(!skus) {
+    await env.DB.batch([
+      env.DB.prepare("INSERT OR IGNORE INTO product_attention(sku,dirty) SELECT sku,1 FROM products"),
+      env.DB.prepare("UPDATE product_attention SET dirty=1,updated_at=CURRENT_TIMESTAMP")
+    ]);
+    return;
+  }
+  const unique=[...new Set(skus.map(str).filter(Boolean))];
+  for(let i=0;i<unique.length;i+=75) {
+    const chunk=unique.slice(i,i+75),marks=chunk.map(()=>"?").join(",");
+    await env.DB.batch([
+      env.DB.prepare("INSERT OR IGNORE INTO product_attention(sku,dirty) SELECT sku,1 FROM products WHERE sku IN ("+marks+")").bind(...chunk),
+      env.DB.prepare("UPDATE product_attention SET dirty=1,updated_at=CURRENT_TIMESTAMP WHERE sku IN ("+marks+")").bind(...chunk)
+    ]);
+  }
+}
+async function refreshAttentionCache(env, config, skus=null, limit=50) {
+  let targets=skus?[...new Set(skus.map(str).filter(Boolean))]:null;
+  if(!targets) {
+    const rows=await env.DB.prepare(`SELECT p.sku
+      FROM products p LEFT JOIN product_attention a ON a.sku=p.sku
+      WHERE a.sku IS NULL OR a.dirty=1
+      ORDER BY p.last_seen ASC,p.sku ASC LIMIT ?`).bind(Math.trunc(bounded(limit,1,200,50))).all();
+    targets=rows.results.map(x=>x.sku);
+  }
+  if(!targets.length)return {refreshed:0,pending:0};
+  let refreshed=0;
+  for(let i=0;i<targets.length;i+=50) {
+    const chunk=targets.slice(i,i+50),marks=chunk.map(()=>"?").join(",");
+    const rows=await loadAttentionRows(env,config,"WHERE p.sku IN ("+marks+")",chunk);
+    refreshed+=await persistAttentionRows(env,rows);
+  }
+  const pending=await env.DB.prepare("SELECT count(*) total FROM products p LEFT JOIN product_attention a ON a.sku=p.sku WHERE a.sku IS NULL OR a.dirty=1").first();
+  return {refreshed,pending:Number(pending?.total)||0};
+}
+async function attentionSummary(env) {
+  const [summary,quality]=await Promise.all([
+    env.DB.prepare(`SELECT
+      count(*) products,
+      sum(CASE WHEN p.active=1 THEN 1 ELSE 0 END) activeProducts,
+      sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 THEN 1 ELSE 0 END) issues,
+      sum(CASE WHEN a.dirty=0 AND a.operational_issue=1 THEN 1 ELSE 0 END) operational,
+      sum(CASE WHEN a.dirty=0 AND a.quality_issue=1 THEN 1 ELSE 0 END) quality,
+      sum(CASE WHEN a.dirty=0 AND a.price_issue=1 THEN 1 ELSE 0 END) price,
+      sum(CASE WHEN a.dirty=0 AND a.pending_issue=1 THEN 1 ELSE 0 END) pendingIssues,
+      sum(CASE WHEN a.sku IS NULL OR a.dirty=1 THEN 1 ELSE 0 END) attentionPending,
+      sum(CASE WHEN a.dirty=0 THEN 1 ELSE 0 END) attentionFresh
+    FROM products p LEFT JOIN product_attention a ON a.sku=p.sku`).first(),
+    env.DB.prepare("SELECT count(DISTINCT o.sku) total FROM seller_options o JOIN products p ON p.sku=o.sku WHERE p.active=1").first()
+  ]);
+  return {
+    products:Number(summary?.products)||0,
+    activeProducts:Number(summary?.activeProducts)||0,
+    issues:Number(summary?.issues)||0,
+    qualityKnown:Number(quality?.total)||0,
+    attentionFresh:Number(summary?.attentionFresh)||0,
+    attentionPending:Number(summary?.attentionPending)||0,
+    attentionBreakdown:{
+      operasional:Number(summary?.operational)||0,
+      kualitas:Number(summary?.quality)||0,
+      harga:Number(summary?.price)||0,
+      tertunda:Number(summary?.pendingIssues)||0
+    }
+  };
+}
 async function refreshOptions(env, sku, productId) {
   if (!productId || !/^[a-zA-Z0-9_-]{1,80}$/.test(productId)) return 0;
   const response = await remoteJson(env, "/api/v1/buyer/product/seller/" + encodeURIComponent(productId));
