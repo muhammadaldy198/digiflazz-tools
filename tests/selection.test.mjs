@@ -155,3 +155,16 @@ test("when all eligible sellers have unknown SLA, choose the cheapest",()=>{
   assert.equal(result[0].seller_id,"u1");
   assert.equal(result[0].sla_days,999);
 });
+
+
+test("cron separates full scan from live auto-switch and reuses refreshed seller selection",()=>{
+  assert.match(source,/if\(cfg\.scanEnabled && age>=scanCadence\)\s*\{\s*await scan\(env,"cron"\);\s*return;/);
+  assert.match(source,/switchSeller\(env,sku,best\.seller_id,"auto",selection\)/);
+  assert.match(source,/preparedSelection \|\| await rankedOptions\(env,sku\)/);
+});
+
+test("Digiflazz seller-directory 403 is backed off instead of treated as a dead session",()=>{
+  assert.match(source,/seller_directory_retry_after/);
+  assert.match(source,/Endpoint direktori seller Digiflazz ditolak HTTP 403/);
+  assert.match(source,/Sesi belum tentu kedaluwarsa/);
+});
