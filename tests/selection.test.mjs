@@ -629,3 +629,11 @@ test("ranking has no hidden manual preferred-seller tie break",()=>{
   assert.doesNotMatch(rankBlock,/mode==="preferred"|\.preferred/);
   assert.match(rankBlock,/localeCompare\(str\(b\.seller_name\)/);
 });
+
+
+test("full scan passes settings into actionable attention summary",()=>{
+  const scanBlock=source.slice(source.indexOf("async function scan("),source.indexOf("function inCutoffWindow("));
+  assert.match(scanBlock,/const cfg=await settings\(env\)/);
+  assert.match(scanBlock,/attentionSummary\(env,cfg\)/);
+  assert.doesNotMatch(scanBlock,/attentionSummary\(env\)(?!,)/);
+});
