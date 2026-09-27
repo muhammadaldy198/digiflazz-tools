@@ -438,7 +438,21 @@ function rank(product, rows, prefs, rule, config, zone) {
       Number(b.preferred)-Number(a.preferred);
   });
 }
-function attentionReasons(product, config, now=new Date()) {
+function parseNominalToken(value) {
+  const token=str(value);
+  if(!token)return Infinity;
+  if(/^\d{1,3}(?:[.,]\d{3})+$/.test(token)) {
+    const n=Number(token.replace(/[.,]/g,""));
+    return Number.isFinite(n)?n:Infinity;
+  }
+  const normalized=token.replace(",",".");
+  const n=Number(normalized);
+  return Number.isFinite(n)?n:Infinity;
+}
+function productNominalValue(product) {
+  let title=str(product?.name),brand=str(product?.brand);
+  if(brand) {
+    const clean=brand.replace(/[.*+?^$()|[\]\\]/g,"\\function attentionReasons(product, config, now=new Date(), context=null) {
   const reasons=[];
   const operation=str(product.operation_status);
   if(operation==="pending")reasons.push("Operasi masih pending");
@@ -453,11 +467,24 @@ function attentionReasons(product, config, now=new Date()) {
     if(!str(product.current_option_seller_id)) reasons.push("Seller saat ini tidak ada di kandidat terbaru");
     else {
       const minRating=Math.max(4,Math.min(5,Number(config.minRating)||4));
-      if(product.current_rating==null||!Number.isFinite(Number(product.current_rating)))reasons.push("Rating tidak tersedia");
-      else if(Number(product.current_rating)<minRating)reasons.push("Rating < "+minRating);
-      const sla=slaDays(product.current_sla);
-      if(sla===999)reasons.push("SLA tidak diketahui");
-      else if(sla>0)reasons.push("SLA H+"+sla);
+      const currentRating=product.current_rating==null?null:Number(product.current_rating);
+      if(currentRating==null||!Number.isFinite(currentRating))reasons.push("Rating tidak tersedia");
+      else if(currentRating<minRating)reasons.push("Rating < "+minRating);
+
+      const currentSla=slaDays(product.current_sla);
+      const best=context?.best||null,current=context?.current||null;
+      if(best&&current&&String(best.seller_id)!==String(current.seller_id)) {
+        if(best.sla_days<currentSla) {
+          reasons.push(currentSla===999
+            ? "SLA tidak diketahui · kandidat H+"+best.sla_days+" tersedia"
+            : "SLA H+"+currentSla+" · kandidat H+"+best.sla_days+" tersedia");
+        } else if(best.sla_days===currentSla&&current.eligible) {
+          const bestRating=Number(best.rating||0),curRating=Number(current.rating||0);
+          if(bestRating>curRating) reasons.push("Rating lebih baik tersedia ("+bestRating+")");
+          else if(bestRating===curRating&&Number(best.review_value||0)>Number(current.review_value||0)) reasons.push("Ulasan seller lebih banyak tersedia");
+          else if(bestRating===curRating&&Number(best.review_value||0)===Number(current.review_value||0)&&Number(best.price)<Number(current.price)) reasons.push("Harga seller lebih murah tersedia");
+        }
+      }
     }
   }
   return [...new Set(reasons)];
@@ -486,12 +513,48 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
     LEFT JOIN switch_operations op ON op.sku=p.sku
     LEFT JOIN seller_options cur ON cur.sku=p.sku AND cur.seller_id=json_extract(p.raw,'$.seller_sku_id')
     LEFT JOIN (SELECT sku,count(*) AS option_count FROM seller_options GROUP BY sku) option_counts ON option_counts.sku=p.sku
-    `+where+`
-    ORDER BY CASE WHEN p.price<=0 THEN 1 ELSE 0 END,p.price ASC,p.name COLLATE NOCASE ASC,p.sku ASC
-  `).bind(...args).all();
+    `+where
+  ).bind(...args).all();
+  if(!rows.results.length)return [];
+  const skus=rows.results.map(x=>x.sku);
+  const placeholders=skus.map(()=>"?").join(",");
+  const [optionRows,preferences,rules,zoneRows]=await Promise.all([
+    env.DB.prepare(`SELECT sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description,
+      json_extract(raw,'$.rating_qty') AS review_count,
+      json_extract(raw,'$.status_sellerSku') AS seller_status,
+      json_extract(raw,'$.start_cut_off') AS start_cut_off,
+      json_extract(raw,'$.end_cut_off') AS end_cut_off
+      FROM seller_options WHERE sku IN (`+placeholders+`)`).bind(...skus).all(),
+    env.DB.prepare("SELECT seller_name,mode FROM seller_preferences").all(),
+    env.DB.prepare("SELECT * FROM seller_rules WHERE is_active=1").all(),
+    env.DB.prepare("SELECT a.sku,z.patterns FROM zone_assignments a JOIN zones z ON z.id=a.zone_id WHERE a.sku IN ("+placeholders+")").bind(...skus).all()
+  ]);
+  const optionsBySku=new Map();
+  for(const option of optionRows.results) {
+    if(!optionsBySku.has(option.sku))optionsBySku.set(option.sku,[]);
+    optionsBySku.get(option.sku).push(option);
+  }
+  const zoneBySku=new Map();
+  for(const row of zoneRows.results) {
+    try { zoneBySku.set(row.sku,{patterns:JSON.parse(row.patterns)}); } catch {}
+  }
   return rows.results.map(row=>{
-    const attention_reasons=attentionReasons(row,config);
-    return {...row,attention_reasons,needs_attention:attention_reasons.length>0};
+    const options=optionsBySku.get(row.sku)||[];
+    const rule=matchingRuleForProduct(row,rules.results);
+    const ranked=rank(row,options,preferences.results,rule,config,zoneBySku.get(row.sku)||null);
+    const current=ranked.find(x=>String(x.seller_id)===String(row.current_seller_sku_id))||null;
+    const best=ranked.find(x=>x.eligible)||null;
+    const attention_reasons=attentionReasons(row,config,new Date(),{ranked,current,best});
+    return {
+      ...row,
+      nominal_value:productNominalValue(row),
+      best_candidate_seller:best?.seller_name||null,
+      best_candidate_price:best?.price??null,
+      best_candidate_rating:best?.rating??null,
+      best_candidate_sla:best?.sla_days??null,
+      attention_reasons,
+      needs_attention:attention_reasons.length>0
+    };
   });
 }
 function attentionBreakdown(rows) {
@@ -904,6 +967,9 @@ async function api(req, env, url) {
       let filtered=allRows;
       if(status==="issues")filtered=filtered.filter(x=>x.needs_attention);
       else if(status==="locked")filtered=filtered.filter(x=>x.locked);
+      else if(status==="active")filtered=filtered.filter(x=>Number(x.active)===1);
+      else if(status==="inactive")filtered=filtered.filter(x=>Number(x.active)!==1);
+      filtered=[...filtered].sort(productSortCompare);
       const total=filtered.length;
       const products=filtered.slice((page-1)*50,page*50);
       return reply({ok:true,total,page,products,categories:categories.results.map(x=>x.category),brands:brands.results.map(x=>x.brand)});
@@ -914,9 +980,10 @@ async function api(req, env, url) {
       const shape=async(d,connectorReady)=>{
         const op=await env.DB.prepare("SELECT status,target_seller_id FROM switch_operations WHERE sku=?").bind(sku).first();
         const raw=JSON.parse(d.product.raw),currentId=String(raw.seller_sku_id??"");
-        const current=d.options.find(x=>String(x.seller_id)===currentId);
-        const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:d.options.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config);
-        return {ok:true,product:{...d.product,raw:undefined,current_seller_sku_id:currentId,attention_reasons:attention,needs_attention:attention.length>0},operation:op,options:d.options.map(({raw,...option})=>option),connectorReady};
+        const current=d.options.find(x=>String(x.seller_id)===currentId)||null;
+        const best=d.options.find(x=>x.eligible)||null;
+        const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:d.options.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config,new Date(),{ranked:d.options,current,best});
+        return {ok:true,product:{...d.product,raw:undefined,current_seller_sku_id:currentId,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:best?.seller_name||null,best_candidate_price:best?.price??null,best_candidate_rating:best?.rating??null,best_candidate_sla:best?.sla_days??null},operation:op,options:d.options.map(({raw,...option})=>option),connectorReady};
       };
       try { return reply(await shape(await rankedOptions(env,sku),true)); }
       catch(error) { await log(env,"WARN","seller-options",error.message,sku); }
@@ -1040,7 +1107,7 @@ async function api(req, env, url) {
     return failure(error, /sesi|Digiflazz mengembalikan|format katalog|tidak mengembalikan/i.test(error.message)?502:400);
   }
 }
-export { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons };
+export { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct };
 export default {
   async fetch(req,env) {
     const url=new URL(req.url);
