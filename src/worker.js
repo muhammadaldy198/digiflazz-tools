@@ -282,14 +282,25 @@ async function scan(env, reason = "manual") {
     let issues = 0;
     for (let i=0;i<products.length;i+=100) {
       const chunk = products.slice(i,i+100);
-      const old = await env.DB.prepare("SELECT sku,price,seller_name,active FROM products WHERE sku IN (" + chunk.map(()=>"?").join(",") + ")").bind(...chunk.map(x=>x.sku)).all();
+      const old = await env.DB.prepare("SELECT sku,price,max_price,seller_name,seller_active,active,stock,unlimited_stock,raw FROM products WHERE sku IN (" + chunk.map(()=>"?").join(",") + ")").bind(...chunk.map(x=>x.sku)).all();
       const before = new Map(old.results.map(x=>[x.sku,x]));
-      const queries = [];
+      const queries = [],chunkDirty=[];
       for (const p of chunk) {
         const previous = before.get(p.sku);
-        const problem = !p.seller_name || !p.seller_active || (p.max_price > 0 && p.price > p.max_price) || (!p.unlimited_stock && p.stock === 0);
-        if (problem) issues++;
-        queries.push(env.DB.prepare("INSERT INTO products(sku,product_id,name,category,brand,product_type,seller_id,seller_name,price,max_price,active,seller_active,stock,unlimited_stock,end_cut_off,raw,last_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(sku) DO UPDATE SET product_id=excluded.product_id,name=excluded.name,category=excluded.category,brand=excluded.brand,product_type=excluded.product_type,seller_id=excluded.seller_id,seller_name=excluded.seller_name,price=excluded.price,max_price=excluded.max_price,active=excluded.active,seller_active=excluded.seller_active,stock=excluded.stock,unlimited_stock=excluded.unlimited_stock,end_cut_off=excluded.end_cut_off,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_id,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.end_cut_off,p.raw));
+        const previousRaw=previous?JSON.parse(previous.raw):null,currentRaw=JSON.parse(p.raw);
+        const changed=!previous ||
+          Number(previous.price)!==Number(p.price) ||
+          Number(previous.max_price)!==Number(p.max_price) ||
+          str(previous.seller_name)!==str(p.seller_name) ||
+          Number(previous.seller_active)!==Number(p.seller_active) ||
+          Number(previous.active)!==Number(p.active) ||
+          Number(previous.stock)!==Number(p.stock) ||
+          Number(previous.unlimited_stock)!==Number(p.unlimited_stock) ||
+          String(previousRaw?.seller_sku_id??"")!==String(currentRaw?.seller_sku_id??"") ||
+          str(previousRaw?.start_cut_off)!==str(currentRaw?.start_cut_off) ||
+          str(previousRaw?.end_cut_off)!==str(currentRaw?.end_cut_off);
+        if(changed)chunkDirty.push(p.sku);
+        queries.push(env.DB.prepare("INSERT INTO products(sku,product_id,name,category,brand,product_type,seller_id,seller_name,price,max_price,active,seller_active,stock,unlimited_stock,end_cut_off,raw,nominal_value,last_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(sku) DO UPDATE SET product_id=excluded.product_id,name=excluded.name,category=excluded.category,brand=excluded.brand,product_type=excluded.product_type,seller_id=excluded.seller_id,seller_name=excluded.seller_name,price=excluded.price,max_price=excluded.max_price,active=excluded.active,seller_active=excluded.seller_active,stock=excluded.stock,unlimited_stock=excluded.unlimited_stock,end_cut_off=excluded.end_cut_off,raw=excluded.raw,nominal_value=excluded.nominal_value,last_seen=CURRENT_TIMESTAMP").bind(p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_id,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.end_cut_off,p.raw,Number.isFinite(productNominalValue(p))?productNominalValue(p):null));
         if (previous && previous.price !== p.price) {
           queries.push(env.DB.prepare("INSERT INTO price_history(buyer_sku_code,seller_name,price) VALUES(?,?,?)").bind(p.sku,p.seller_name,p.price));
           queries.push(env.DB.prepare("INSERT INTO events(level,kind,sku,message) VALUES('INFO','price',?,?)").bind(p.sku,"Harga berubah Rp"+previous.price+" → Rp"+p.price));
@@ -303,6 +314,7 @@ async function scan(env, reason = "manual") {
         }
       }
       for (let j=0;j<queries.length;j+=80) await env.DB.batch(queries.slice(j,j+80));
+      if(chunkDirty.length)await markAttentionDirty(env,chunkDirty);
     }
     const stale=await env.DB.prepare("SELECT sku FROM products WHERE last_seen < (SELECT started_at FROM scan_runs WHERE id=?)").bind(runId).all();
     if(stale.results.length) {
@@ -311,6 +323,7 @@ async function scan(env, reason = "manual") {
         const marks=skus.map(()=>"?").join(",");
         await env.DB.batch([
           env.DB.prepare("DELETE FROM seller_options WHERE sku IN ("+marks+")").bind(...skus),
+          env.DB.prepare("DELETE FROM product_attention WHERE sku IN ("+marks+")").bind(...skus),
           env.DB.prepare("DELETE FROM products WHERE sku IN ("+marks+")").bind(...skus)
         ]);
       }
@@ -336,11 +349,13 @@ async function scan(env, reason = "manual") {
     for (let i=0;i<sellerStmts.length;i+=80) await env.DB.batch(sellerStmts.slice(i,i+80));
     const cfg=await settings(env);
     const qualityRefresh=await refreshAttentionCoverage(env,cfg.attentionRefreshBatchSize);
-    const attention=await loadAttentionRows(env,cfg);
-    issues=attention.filter(x=>x.needs_attention).length;
+    if(qualityRefresh.skus?.length)await markAttentionDirty(env,qualityRefresh.skus);
+    const cacheRefresh=await refreshAttentionCache(env,cfg,null,100);
+    const summary=await attentionSummary(env);
+    issues=summary.issues;
     await env.DB.prepare("UPDATE scan_runs SET status='success',finished_at=CURRENT_TIMESTAMP,total=?,issues=?,message=? WHERE id=?").bind(products.length,issues,reason,runId).run();
-    await log(env,"INFO","scan",products.length+" produk dipindai; "+issues+" perlu perhatian; "+qualityRefresh.refreshed+" rating/SLA diperbarui.");
-    return { ok:true,total:products.length,issues,qualityRefreshed:qualityRefresh.refreshed };
+    await log(env,"INFO","scan",products.length+" produk dipindai; "+issues+" perlu perhatian; "+qualityRefresh.refreshed+" rating/SLA diperbarui; "+cacheRefresh.refreshed+" cache perhatian dihitung.");
+    return { ok:true,total:products.length,issues,qualityRefreshed:qualityRefresh.refreshed,attentionRefreshed:cacheRefresh.refreshed,attentionPending:summary.attentionPending };
   } catch (error) {
     await env.DB.prepare("UPDATE scan_runs SET status='error',finished_at=CURRENT_TIMESTAMP,message=? WHERE id=?").bind(error.message,runId).run();
     await log(env,"ERROR","scan",error.message);
@@ -610,6 +625,116 @@ function attentionBreakdown(rows) {
   }
   return out;
 }
+
+function attentionFlags(reasons) {
+  const categories=new Set((reasons||[]).map(attentionCategory));
+  return {
+    operational:categories.has("operasional")?1:0,
+    quality:categories.has("kualitas")?1:0,
+    price:categories.has("harga")?1:0,
+    pending:categories.has("tertunda")?1:0
+  };
+}
+async function persistAttentionRows(env, rows) {
+  if(!rows?.length)return 0;
+  const statements=[];
+  for(const row of rows) {
+    const flags=attentionFlags(row.attention_reasons);
+    statements.push(
+      env.DB.prepare(`INSERT INTO product_attention(
+        sku,needs_attention,reasons_json,operational_issue,quality_issue,price_issue,pending_issue,
+        current_rating,current_sla,best_candidate_seller,best_candidate_price,best_candidate_rating,best_candidate_sla,
+        option_count,locked,operation_status,dirty,evaluated_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      ON CONFLICT(sku) DO UPDATE SET
+        needs_attention=excluded.needs_attention,reasons_json=excluded.reasons_json,
+        operational_issue=excluded.operational_issue,quality_issue=excluded.quality_issue,price_issue=excluded.price_issue,pending_issue=excluded.pending_issue,
+        current_rating=excluded.current_rating,current_sla=excluded.current_sla,
+        best_candidate_seller=excluded.best_candidate_seller,best_candidate_price=excluded.best_candidate_price,
+        best_candidate_rating=excluded.best_candidate_rating,best_candidate_sla=excluded.best_candidate_sla,
+        option_count=excluded.option_count,locked=excluded.locked,operation_status=excluded.operation_status,
+        dirty=0,evaluated_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP`)
+      .bind(
+        row.sku,row.needs_attention?1:0,JSON.stringify(row.attention_reasons||[]),
+        flags.operational,flags.quality,flags.price,flags.pending,
+        row.current_rating??null,row.current_sla??null,row.best_candidate_seller??null,row.best_candidate_price??null,
+        row.best_candidate_rating??null,row.best_candidate_sla??null,
+        Number(row.option_count)||0,Number(row.locked)||0,str(row.operation_status)||null
+      )
+    );
+    statements.push(env.DB.prepare("UPDATE products SET nominal_value=? WHERE sku=?").bind(
+      Number.isFinite(Number(row.nominal_value))&&Number(row.nominal_value)<Infinity?Number(row.nominal_value):null,row.sku
+    ));
+  }
+  for(let i=0;i<statements.length;i+=80)await env.DB.batch(statements.slice(i,i+80));
+  return rows.length;
+}
+async function markAttentionDirty(env, skus=null) {
+  if(!skus) {
+    await env.DB.batch([
+      env.DB.prepare("INSERT OR IGNORE INTO product_attention(sku,dirty) SELECT sku,1 FROM products"),
+      env.DB.prepare("UPDATE product_attention SET dirty=1,updated_at=CURRENT_TIMESTAMP")
+    ]);
+    return;
+  }
+  const unique=[...new Set(skus.map(str).filter(Boolean))];
+  for(let i=0;i<unique.length;i+=75) {
+    const chunk=unique.slice(i,i+75),marks=chunk.map(()=>"?").join(",");
+    await env.DB.batch([
+      env.DB.prepare("INSERT OR IGNORE INTO product_attention(sku,dirty) SELECT sku,1 FROM products WHERE sku IN ("+marks+")").bind(...chunk),
+      env.DB.prepare("UPDATE product_attention SET dirty=1,updated_at=CURRENT_TIMESTAMP WHERE sku IN ("+marks+")").bind(...chunk)
+    ]);
+  }
+}
+async function refreshAttentionCache(env, config, skus=null, limit=50) {
+  let targets=skus?[...new Set(skus.map(str).filter(Boolean))]:null;
+  if(!targets) {
+    const rows=await env.DB.prepare(`SELECT p.sku
+      FROM products p LEFT JOIN product_attention a ON a.sku=p.sku
+      WHERE a.sku IS NULL OR a.dirty=1
+      ORDER BY p.last_seen ASC,p.sku ASC LIMIT ?`).bind(Math.trunc(bounded(limit,1,200,50))).all();
+    targets=rows.results.map(x=>x.sku);
+  }
+  if(!targets.length)return {refreshed:0,pending:0};
+  let refreshed=0;
+  for(let i=0;i<targets.length;i+=50) {
+    const chunk=targets.slice(i,i+50),marks=chunk.map(()=>"?").join(",");
+    const rows=await loadAttentionRows(env,config,"WHERE p.sku IN ("+marks+")",chunk);
+    refreshed+=await persistAttentionRows(env,rows);
+  }
+  const pending=await env.DB.prepare("SELECT count(*) total FROM products p LEFT JOIN product_attention a ON a.sku=p.sku WHERE a.sku IS NULL OR a.dirty=1").first();
+  return {refreshed,pending:Number(pending?.total)||0};
+}
+async function attentionSummary(env) {
+  const [summary,quality]=await Promise.all([
+    env.DB.prepare(`SELECT
+      count(*) products,
+      sum(CASE WHEN p.active=1 THEN 1 ELSE 0 END) activeProducts,
+      sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 THEN 1 ELSE 0 END) issues,
+      sum(CASE WHEN a.dirty=0 AND a.operational_issue=1 THEN 1 ELSE 0 END) operational,
+      sum(CASE WHEN a.dirty=0 AND a.quality_issue=1 THEN 1 ELSE 0 END) quality,
+      sum(CASE WHEN a.dirty=0 AND a.price_issue=1 THEN 1 ELSE 0 END) price,
+      sum(CASE WHEN a.dirty=0 AND a.pending_issue=1 THEN 1 ELSE 0 END) pendingIssues,
+      sum(CASE WHEN a.sku IS NULL OR a.dirty=1 THEN 1 ELSE 0 END) attentionPending,
+      sum(CASE WHEN a.dirty=0 THEN 1 ELSE 0 END) attentionFresh
+    FROM products p LEFT JOIN product_attention a ON a.sku=p.sku`).first(),
+    env.DB.prepare("SELECT count(DISTINCT o.sku) total FROM seller_options o JOIN products p ON p.sku=o.sku WHERE p.active=1").first()
+  ]);
+  return {
+    products:Number(summary?.products)||0,
+    activeProducts:Number(summary?.activeProducts)||0,
+    issues:Number(summary?.issues)||0,
+    qualityKnown:Number(quality?.total)||0,
+    attentionFresh:Number(summary?.attentionFresh)||0,
+    attentionPending:Number(summary?.attentionPending)||0,
+    attentionBreakdown:{
+      operasional:Number(summary?.operational)||0,
+      kualitas:Number(summary?.quality)||0,
+      harga:Number(summary?.price)||0,
+      tertunda:Number(summary?.pendingIssues)||0
+    }
+  };
+}
 async function refreshOptions(env, sku, productId) {
   if (!productId || !/^[a-zA-Z0-9_-]{1,80}$/.test(productId)) return 0;
   const response = await remoteJson(env, "/api/v1/buyer/product/seller/" + encodeURIComponent(productId));
@@ -636,10 +761,12 @@ async function refreshAttentionCoverage(env, requestedLimit=5) {
     LIMIT ?
   `).bind(limit).all();
   let refreshed=0,failed=0,lastError=null;
+  const refreshedSkus=[];
   for(const row of rows.results) {
     try {
       await refreshOptions(env,row.sku,row.product_id);
       refreshed++;
+      refreshedSkus.push(row.sku);
     } catch(error) {
       failed++;lastError=error;
       if(error?.status===401||error?.status===403)break;
@@ -647,7 +774,7 @@ async function refreshAttentionCoverage(env, requestedLimit=5) {
   }
   if(failed) await log(env,"WARN","attention-refresh",failed+" pembaruan rating/SLA gagal"+(lastError?": "+lastError.message:"")+".");
   if(refreshed) await log(env,"INFO","attention-refresh",refreshed+" produk diperbarui data rating/SLA-nya.");
-  return {refreshed,failed};
+  return {refreshed,failed,skus:refreshedSkus};
 }
 async function rankedOptions(env, sku, refresh = true) {
   const entry = await env.DB.prepare("SELECT product_id FROM products WHERE sku=?").bind(sku).first();
@@ -718,12 +845,14 @@ async function updateBuyerSku(env,oldSku,newSku) {
   if(!verified||String(verified.id)!==String(current.id))throw Error("Perubahan SKU belum terkonfirmasi di Digiflazz. Jangan ulangi sebelum memeriksa produk.");
   const normalized=normalizeProduct(verified);
   await env.DB.batch([
-    env.DB.prepare("UPDATE products SET sku=?,raw=?,active=?,seller_active=?,price=?,max_price=?,stock=?,unlimited_stock=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(newSku,JSON.stringify(verified),normalized.active,normalized.seller_active,normalized.price,normalized.max_price,normalized.stock,normalized.unlimited_stock,oldSku),
+    env.DB.prepare("DELETE FROM product_attention WHERE sku=?").bind(oldSku),
+    env.DB.prepare("UPDATE products SET sku=?,raw=?,active=?,seller_active=?,price=?,max_price=?,stock=?,unlimited_stock=?,nominal_value=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(newSku,JSON.stringify(verified),normalized.active,normalized.seller_active,normalized.price,normalized.max_price,normalized.stock,normalized.unlimited_stock,Number.isFinite(productNominalValue(normalized))?productNominalValue(normalized):null,oldSku),
     env.DB.prepare("UPDATE seller_options SET sku=? WHERE sku=?").bind(newSku,oldSku),
     env.DB.prepare("UPDATE product_locks SET buyer_sku_code=? WHERE buyer_sku_code=?").bind(newSku,oldSku),
     env.DB.prepare("UPDATE zone_assignments SET sku=? WHERE sku=?").bind(newSku,oldSku),
     env.DB.prepare("UPDATE switch_operations SET sku=? WHERE sku=?").bind(newSku,oldSku),
-    env.DB.prepare("UPDATE seller_rules SET scope_value=? WHERE scope_type='product' AND scope_value=?").bind(newSku,oldSku)
+    env.DB.prepare("UPDATE seller_rules SET scope_value=? WHERE scope_type='product' AND scope_value=?").bind(newSku,oldSku),
+    env.DB.prepare("INSERT OR REPLACE INTO product_attention(sku,dirty,updated_at) VALUES(?,1,CURRENT_TIMESTAMP)").bind(newSku)
   ]);
   await log(env,"INFO","product-sku","SKU Digiflazz diubah: "+oldSku+" → "+newSku,newSku);
   return {ok:true,oldSku,sku:newSku,verified:true};
@@ -737,6 +866,7 @@ async function setBuyerProductStatus(env,sku,active) {
   const normalized=normalizeProduct(verified);
   if(Boolean(normalized.active)!==active)throw Error("Status produk belum terkonfirmasi di Digiflazz. Jangan ulangi sebelum memeriksa produk.");
   await env.DB.prepare("UPDATE products SET active=?,raw=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(active?1:0,JSON.stringify(verified),sku).run();
+  await markAttentionDirty(env,[sku]);
   await log(env,"INFO","product-status","Produk "+(active?"diaktifkan":"dinonaktifkan")+" langsung di Digiflazz.",sku);
   return {ok:true,sku,active,verified:true};
 }
@@ -748,6 +878,7 @@ async function deleteBuyerProduct(env,sku) {
   const after=await findProductBySku(env,sku);
   if(after&&String(after.id)===String(current.id))throw Error("Penghapusan belum terkonfirmasi di Digiflazz. Jangan ulangi sebelum memeriksa produk.");
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM product_attention WHERE sku=?").bind(sku),
     env.DB.prepare("DELETE FROM seller_options WHERE sku=?").bind(sku),
     env.DB.prepare("DELETE FROM product_locks WHERE buyer_sku_code=?").bind(sku),
     env.DB.prepare("DELETE FROM zone_assignments WHERE sku=?").bind(sku),
@@ -813,10 +944,15 @@ async function switchSeller(env, sku, sellerId, reason, preparedSelection = null
     await remoteSave(env,changedProduct(current,choice,config.preserveMaxPrice && !config.autoFillMaxPrice,config.maxPriceOffset,config.preserveMaxPrice && config.autoFillMaxPrice));
     const verified=await freshProduct(env,sku);
     if (String(verified.seller_sku_id)!==sellerId) throw Error("Respons simpan diterima, tetapi seller baru belum terkonfirmasi.");
+    const normalizedVerified=normalizeProduct(verified);
     await env.DB.batch([
       env.DB.prepare("UPDATE switch_history SET status='success' WHERE id=?").bind(record.meta.last_row_id),
-      env.DB.prepare("UPDATE switch_operations SET status='success' WHERE sku=?").bind(sku)
+      env.DB.prepare("UPDATE switch_operations SET status='success' WHERE sku=?").bind(sku),
+      env.DB.prepare("UPDATE products SET seller_id=?,seller_name=?,price=?,max_price=?,seller_active=?,stock=?,unlimited_stock=?,raw=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(
+        normalizedVerified.seller_id,normalizedVerified.seller_name,normalizedVerified.price,normalizedVerified.max_price,normalizedVerified.seller_active,normalizedVerified.stock,normalizedVerified.unlimited_stock,JSON.stringify(verified),sku
+      )
     ]);
+    await markAttentionDirty(env,[sku]);
     await log(env,"INFO","switch","Seller dipindahkan dan dikonfirmasi di Digiflazz: "+candidate.seller_name,sku);
     return {ok:true,sku,seller:candidate.seller_name,price:candidate.price,verified:true};
   } catch(error) {
@@ -835,11 +971,20 @@ async function autoSwitchBatch(env, requestedLimit) {
   const verified=await env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first();
   if(!verified) throw Error("Lakukan satu perpindahan seller manual yang berhasil sebelum menjalankan auto-switch.");
   const limit=Math.trunc(bounded(requestedLimit,1,10,cfg.autoSwitchBatchSize));
-  const attention=await loadAttentionRows(env,cfg,"WHERE p.active=1");
-  const targets=attention
-    .filter(x=>x.needs_attention&&!x.locked&&!["pending","unknown"].includes(str(x.operation_status)))
-    .sort((a,b)=>String(a.last_seen).localeCompare(String(b.last_seen)))
-    .slice(0,limit);
+  const rows=await env.DB.prepare(`SELECT p.sku,p.last_seen,a.reasons_json
+    FROM product_attention a
+    JOIN products p ON p.sku=a.sku
+    LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku
+    LEFT JOIN switch_operations op ON op.sku=p.sku
+    WHERE a.dirty=0 AND a.needs_attention=1 AND p.active=1
+      AND l.buyer_sku_code IS NULL
+      AND COALESCE(op.status,'') NOT IN ('pending','unknown')
+    ORDER BY p.last_seen ASC,p.sku ASC LIMIT ?`).bind(limit).all();
+  const targets=rows.results.map(row=>{
+    let attention_reasons=[];
+    try { attention_reasons=JSON.parse(row.reasons_json||"[]"); } catch {}
+    return {...row,attention_reasons};
+  });
   let switched=0,noCandidate=0,failed=0;
   const results=[];
   for(const target of targets) {
@@ -860,15 +1005,18 @@ async function autoSwitchBatch(env, requestedLimit) {
         noCandidate++;
         await log(env,"INFO","auto-switch",top&&String(top.seller_id)===currentId?"Seller saat ini masih kandidat terbaik; tidak dipindahkan.":"Tidak ada kandidat seller yang memenuhi aturan.",sku);
         results.push({sku,status:"no_candidate"});
+        await markAttentionDirty(env,[sku]);
         continue;
       }
       const changed=await switchSeller(env,sku,best.seller_id,"auto",selection);
       switched++;
       results.push({sku,status:"switched",seller:changed.seller,price:changed.price});
+      await markAttentionDirty(env,[sku]);
     } catch(error) {
       failed++;
       await log(env,"WARN","auto-switch",error.message,sku);
       results.push({sku,status:"error",error:error.message});
+      await markAttentionDirty(env,[sku]);
     }
   }
   return {ok:true,examined:targets.length,switched,noCandidate,failed,remainingPossible:targets.length===limit,results};
@@ -886,11 +1034,16 @@ async function updateMaxPrice(env,sku,amount) {
     await remoteSave(env,{...fresh,max_price:amount,change:true});
     const verified=await freshProduct(env,sku);
     if(Number(verified.max_price)!==amount) throw Error("Harga maksimum belum terkonfirmasi di Digiflazz.");
-    await env.DB.prepare("UPDATE switch_operations SET status='success' WHERE sku=?").bind(sku).run();
+    await env.DB.batch([
+      env.DB.prepare("UPDATE switch_operations SET status='success' WHERE sku=?").bind(sku),
+      env.DB.prepare("UPDATE products SET max_price=?,raw=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(amount,JSON.stringify(verified),sku)
+    ]);
+    await markAttentionDirty(env,[sku]);
     await log(env,"INFO","max-price","Harga maksimum tersimpan: Rp"+amount,sku);
     return {ok:true,maxPrice:amount,verified:true};
   } catch(error) {
     await env.DB.prepare("UPDATE switch_operations SET status='unknown' WHERE sku=?").bind(sku).run();
+    await markAttentionDirty(env,[sku]);
     await log(env,"ERROR","max-price",error.message+" Tidak diulang otomatis.",sku);
     throw error;
   }
@@ -906,6 +1059,7 @@ async function reconcile(env,sku) {
   const status=confirmed?"success":"error";
   await env.DB.prepare("UPDATE switch_operations SET status=? WHERE sku=?").bind(status,sku).run();
   if(!op.target_seller_id.startsWith("max:")) await env.DB.prepare("UPDATE switch_history SET status=? WHERE id=(SELECT id FROM switch_history WHERE buyer_sku_code=? AND status IN ('pending','unknown') ORDER BY id DESC LIMIT 1)").bind(status,sku).run();
+  await markAttentionDirty(env,[sku]);
   await log(env,confirmed?"INFO":"WARN","reconcile",confirmed?"Perubahan terkonfirmasi di Digiflazz.":"Target tidak ditemukan pada data terbaru; periksa sebelum mengulang.",sku);
   return {ok:true,confirmed,status};
 }
@@ -946,17 +1100,14 @@ async function api(req, env, url) {
     if (method!=="GET" && method!=="HEAD" && req.headers.get("origin")!==url.origin) return failure("Asal permintaan tidak sah.",403);
     if (method==="GET" && path==="/api/bootstrap") {
       const cfg=await settings(env);
-      const [c, attention, sellerCount, last, events, verified]=await Promise.all([
-        conn(env),loadAttentionRows(env,cfg),
+      const [c, counts, sellerCount, last, events, verified]=await Promise.all([
+        conn(env),attentionSummary(env),
         env.DB.prepare("SELECT count(*) total FROM sellers").first(),
         env.DB.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").first(),
         env.DB.prepare("SELECT id,level,kind,sku,message,created_at FROM events ORDER BY id DESC LIMIT 8").all(),
         env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first()
       ]);
-      const issues=attention.filter(x=>x.needs_attention).length;
-      const activeProducts=attention.filter(x=>Number(x.active)===1).length;
-      const qualityKnown=attention.filter(x=>Number(x.active)===1&&Number(x.option_count)>0).length;
-      return reply({ok:true,connection:{connected:!!c,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at},settings:cfg,counts:{products:attention.length,issues,sellers:sellerCount.total,attentionBreakdown:attentionBreakdown(attention),activeProducts,qualityKnown},lastScan:last,events:events.results,liveSwitchAvailable:!!verified});
+      return reply({ok:true,connection:{connected:!!c,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at},settings:cfg,counts:{...counts,sellers:Number(sellerCount?.total)||0},lastScan:last,events:events.results,liveSwitchAvailable:!!verified});
     }
     if (method==="GET" && path==="/api/connection/status") {
       const c=await conn(env);
@@ -993,7 +1144,8 @@ async function api(req, env, url) {
       return reply({ok:true,routes:rows.results});
     }
     if (method==="GET" && path==="/api/products") {
-      const page=bounded(url.searchParams.get("page"),1,100000,1);
+      const page=Math.trunc(bounded(url.searchParams.get("page"),1,100000,1));
+      const offset=(page-1)*50;
       const q="%"+str(url.searchParams.get("q")).slice(0,80)+"%";
       const status=str(url.searchParams.get("status"));
       const category=str(url.searchParams.get("category")).slice(0,120);
@@ -1002,22 +1154,35 @@ async function api(req, env, url) {
       const args=[q,q,q,q];
       if(category){where+=" AND p.category=?";args.push(category)}
       if(brand){where+=" AND p.brand=?";args.push(brand)}
-      const cfg=await settings(env);
+      if(status==="issues")where+=" AND a.dirty=0 AND a.needs_attention=1";
+      else if(status==="locked")where+=" AND l.buyer_sku_code IS NOT NULL";
+      else if(status==="active")where+=" AND p.active=1";
+      else if(status==="inactive")where+=" AND p.active=0";
+      const from=` FROM products p
+        LEFT JOIN product_attention a ON a.sku=p.sku
+        LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku `;
       const brandSql=category?"SELECT DISTINCT brand FROM products WHERE category=? AND brand<>'' ORDER BY brand COLLATE NOCASE":"SELECT DISTINCT brand FROM products WHERE brand<>'' ORDER BY brand COLLATE NOCASE";
-      const [allRows,categories,brands]=await Promise.all([
-        loadAttentionRows(env,cfg,where,args),
+      const [count,rows,categories,brands]=await Promise.all([
+        env.DB.prepare("SELECT count(*) total"+from+where).bind(...args).first(),
+        env.DB.prepare(`SELECT p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.last_seen,p.nominal_value,
+          l.buyer_sku_code IS NOT NULL AS locked,
+          COALESCE(a.needs_attention,0) AS needs_attention,COALESCE(a.dirty,1) AS attention_dirty,
+          a.reasons_json,a.current_rating,a.current_sla,a.best_candidate_seller,a.best_candidate_price,a.best_candidate_rating,a.best_candidate_sla,
+          a.option_count,a.operation_status
+          `+from+where+`
+          ORDER BY p.brand COLLATE NOCASE ASC,
+            CASE WHEN p.nominal_value IS NULL THEN 1 ELSE 0 END ASC,
+            p.nominal_value ASC,p.name COLLATE NOCASE ASC,p.sku COLLATE NOCASE ASC
+          LIMIT 50 OFFSET ?`).bind(...args,offset).all(),
         env.DB.prepare("SELECT DISTINCT category FROM products WHERE category<>'' ORDER BY category COLLATE NOCASE").all(),
         category?env.DB.prepare(brandSql).bind(category).all():env.DB.prepare(brandSql).all()
       ]);
-      let filtered=allRows;
-      if(status==="issues")filtered=filtered.filter(x=>x.needs_attention);
-      else if(status==="locked")filtered=filtered.filter(x=>x.locked);
-      else if(status==="active")filtered=filtered.filter(x=>Number(x.active)===1);
-      else if(status==="inactive")filtered=filtered.filter(x=>Number(x.active)!==1);
-      filtered=[...filtered].sort(productSortCompare);
-      const total=filtered.length;
-      const products=filtered.slice((page-1)*50,page*50);
-      return reply({ok:true,total,page,products,categories:categories.results.map(x=>x.category),brands:brands.results.map(x=>x.brand)});
+      const products=rows.results.map(row=>{
+        let attention_reasons=[];
+        try { attention_reasons=JSON.parse(row.reasons_json||"[]"); } catch {}
+        return {...row,attention_reasons,needs_attention:Boolean(row.needs_attention),attention_dirty:Boolean(row.attention_dirty),locked:Boolean(row.locked)};
+      });
+      return reply({ok:true,total:Number(count?.total)||0,page,products,categories:categories.results.map(x=>x.category),brands:brands.results.map(x=>x.brand)});
     }
     const opt=path.match(/^\/api\/products\/([^/]+)\/options$/);
     if (method==="GET" && opt) {
@@ -1028,7 +1193,9 @@ async function api(req, env, url) {
         const current=d.options.find(x=>String(x.seller_id)===currentId)||null;
         const best=d.options.find(x=>x.eligible)||null;
         const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:d.options.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config,new Date(),{ranked:d.options,current,best});
-        return {ok:true,product:{...d.product,raw:undefined,current_seller_sku_id:currentId,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:best?.seller_name||null,best_candidate_price:best?.price??null,best_candidate_rating:best?.rating??null,best_candidate_sla:best?.sla_days??null},operation:op,options:d.options.map(({raw,...option})=>option),connectorReady};
+        const cached={...d.product,operation_status:op?.status,current_rating:current?.rating??null,current_sla:current?.sla??null,option_count:d.options.length,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:best?.seller_name||null,best_candidate_price:best?.price??null,best_candidate_rating:best?.rating??null,best_candidate_sla:best?.sla_days??null};
+        await persistAttentionRows(env,[cached]);
+        return {ok:true,product:{...cached,raw:undefined,current_seller_sku_id:currentId},operation:op,options:d.options.map(({raw,...option})=>option),connectorReady};
       };
       try { return reply(await shape(await rankedOptions(env,sku),true)); }
       catch(error) { await log(env,"WARN","seller-options",error.message,sku); }
@@ -1039,6 +1206,7 @@ async function api(req, env, url) {
       const sku=decodeURIComponent(lock[1]),body=await getJson(req);
       if(bool(body.locked)) await env.DB.prepare("INSERT INTO product_locks(buyer_sku_code,reason) VALUES(?,?) ON CONFLICT(buyer_sku_code) DO UPDATE SET reason=excluded.reason").bind(sku,str(body.reason)).run();
       else await env.DB.prepare("DELETE FROM product_locks WHERE buyer_sku_code=?").bind(sku).run();
+      await markAttentionDirty(env,[sku]);
       return reply({ok:true,locked:bool(body.locked)});
     }
     const change=path.match(/^\/api\/products\/([^/]+)\/switch$/);
@@ -1079,6 +1247,7 @@ async function api(req, env, url) {
       if(!["preferred","blocked","none"].includes(body.mode))throw Error("Pilihan tidak valid.");
       await env.DB.prepare("DELETE FROM seller_preferences WHERE seller_name=?").bind(name).run();
       if(body.mode!=="none") await env.DB.prepare("INSERT INTO seller_preferences(seller_name,mode) VALUES(?,?)").bind(name,body.mode).run();
+      await markAttentionDirty(env);
       return reply({ok:true,mode:body.mode});
     }
     if(method==="GET"&&path==="/api/rules") {
@@ -1090,11 +1259,13 @@ async function api(req, env, url) {
       if(!["global","category","brand","type","product"].includes(b.scope_type))throw Error("Cakupan tidak valid.");
       if(b.scope_type!=="global"&&!str(b.scope_value))throw Error("Target aturan wajib diisi.");
       const r=await env.DB.prepare("INSERT INTO seller_rules(scope_type,scope_value,min_rating,max_price,require_stock,avoid_cutoff) VALUES(?,?,?,?,?,?)").bind(b.scope_type,str(b.scope_value),b.min_rating==null?null:bounded(b.min_rating,0,5),b.max_price==null?null:bounded(b.max_price,0,1000000000),bool(b.require_stock)?1:0,bool(b.avoid_cutoff)?1:0).run();
+      await markAttentionDirty(env);
       return reply({ok:true,id:r.meta.last_row_id});
     }
     const rule=path.match(/^\/api\/rules\/(\d+)$/);
     if(method==="DELETE"&&rule) {
       await env.DB.prepare("DELETE FROM seller_rules WHERE id=?").bind(Number(rule[1])).run();
+      await markAttentionDirty(env);
       return reply({ok:true});
     }
     if(method==="GET"&&path==="/api/zones") {
@@ -1105,11 +1276,13 @@ async function api(req, env, url) {
       const b=await getJson(req),patterns=str(b.patterns).split(",").map(x=>x.trim()).filter(Boolean);
       if(!str(b.name)||!str(b.product_id)||!patterns.length)throw Error("Nama, product ID, dan pola zona wajib diisi.");
       const r=await env.DB.prepare("INSERT INTO zones(name,product_id,patterns) VALUES(?,?,?)").bind(str(b.name),str(b.product_id),JSON.stringify(patterns)).run();
+      await markAttentionDirty(env);
       return reply({ok:true,id:r.meta.last_row_id});
     }
     const zone=path.match(/^\/api\/zones\/(\d+)$/);
     if(method==="DELETE"&&zone) {
       await env.DB.prepare("DELETE FROM zones WHERE id=?").bind(Number(zone[1])).run();
+      await markAttentionDirty(env);
       return reply({ok:true});
     }
     if(method==="POST"&&path==="/api/zones/assign") {
@@ -1117,6 +1290,7 @@ async function api(req, env, url) {
       if(!str(b.sku))throw Error("SKU wajib diisi.");
       if(b.zone_id) await env.DB.prepare("INSERT INTO zone_assignments(sku,zone_id) VALUES(?,?) ON CONFLICT(sku) DO UPDATE SET zone_id=excluded.zone_id").bind(str(b.sku),Number(b.zone_id)).run();
       else await env.DB.prepare("DELETE FROM zone_assignments WHERE sku=?").bind(str(b.sku)).run();
+      await markAttentionDirty(env,[str(b.sku)]);
       return reply({ok:true});
     }
     if(method==="GET"&&path==="/api/events") {
@@ -1140,6 +1314,7 @@ async function api(req, env, url) {
       }
       const operations=Object.entries(next).map(([k,v])=>env.DB.prepare("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP").bind(k,JSON.stringify(v)));
       await env.DB.batch(operations);
+      await markAttentionDirty(env);
       return reply({ok:true,settings:next});
     }
     if(method==="POST"&&path==="/api/service-code") {
@@ -1177,6 +1352,9 @@ export default {
         await scan(env,"cron");
         return;
       }
+
+      // Recompute only dirty materialized attention rows; overview/product pages never fan out across all sellers.
+      await refreshAttentionCache(env,cfg,null,100);
 
       if(liveAuto) {
         try {
