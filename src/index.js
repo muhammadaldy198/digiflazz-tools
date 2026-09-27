@@ -797,35 +797,48 @@ async function refreshOptions(env, sku, productId) {
     const name = str(x.seller ?? x.seller_name ?? x.seller_details?.company_name ?? id);
     return env.DB.prepare("INSERT INTO seller_options(sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description,raw,last_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(sku,seller_id) DO UPDATE SET seller_name=excluded.seller_name,price=excluded.price,rating=excluded.rating,stock=excluded.stock,unlimited_stock=excluded.unlimited_stock,connection=excluded.connection,sla=excluded.sla,description=excluded.description,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(sku,id,name,bounded(x.price,0,1000000000),x.reviewAvg ?? x.seller_details?.review_avg ?? x.review_avg ?? null,x.stock??null,bool(x.unlimited_stock)?1:0,str(x.connectionType??x.connection),str(x.seller_details?.sla??x.sla),str(x.deskripsi??x.description),JSON.stringify(x).slice(0,20000));
   }).filter(Boolean);
+  await env.DB.prepare("DELETE FROM seller_options WHERE sku=?").bind(sku).run();
   for (let i=0;i<cmds.length;i+=80) await env.DB.batch(cmds.slice(i,i+80));
   return cmds.length;
 }
 async function refreshAttentionCoverage(env, requestedLimit=5) {
   const limit=Math.trunc(bounded(requestedLimit,1,10,5));
   const rows=await env.DB.prepare(`
-    SELECT p.sku,p.product_id,max(o.last_seen) AS quality_last_seen
+    SELECT p.sku,p.product_id,max(o.last_seen) AS quality_last_seen,q.next_retry_at,q.last_attempt
     FROM products p
     LEFT JOIN seller_options o ON o.sku=p.sku
+    LEFT JOIN quality_refresh_state q ON q.sku=p.sku
     WHERE p.active=1
-    GROUP BY p.sku,p.product_id
-    ORDER BY CASE WHEN max(o.last_seen) IS NULL THEN 0 ELSE 1 END ASC,max(o.last_seen) ASC,p.sku ASC
+      AND (q.next_retry_at IS NULL OR q.next_retry_at<=CURRENT_TIMESTAMP)
+    GROUP BY p.sku,p.product_id,q.next_retry_at,q.last_attempt
+    ORDER BY CASE WHEN max(o.last_seen) IS NULL THEN 0 ELSE 1 END ASC,
+      COALESCE(max(o.last_seen),q.last_attempt,'1970-01-01 00:00:00') ASC,
+      p.sku ASC
     LIMIT ?
   `).bind(limit).all();
-  let refreshed=0,failed=0,lastError=null;
+  let refreshed=0,empty=0,failed=0,lastError=null;
   const refreshedSkus=[];
   for(const row of rows.results) {
     try {
-      await refreshOptions(env,row.sku,row.product_id);
-      refreshed++;
+      const count=await refreshOptions(env,row.sku,row.product_id);
+      if(count>0) {
+        refreshed++;
+        await env.DB.prepare("INSERT INTO quality_refresh_state(sku,last_attempt,last_result,empty_count,next_retry_at) VALUES(?,CURRENT_TIMESTAMP,'ok',0,NULL) ON CONFLICT(sku) DO UPDATE SET last_attempt=CURRENT_TIMESTAMP,last_result='ok',empty_count=0,next_retry_at=NULL").bind(row.sku).run();
+      } else {
+        empty++;
+        await env.DB.prepare("INSERT INTO quality_refresh_state(sku,last_attempt,last_result,empty_count,next_retry_at) VALUES(?,CURRENT_TIMESTAMP,'empty',1,datetime('now','+6 hours')) ON CONFLICT(sku) DO UPDATE SET last_attempt=CURRENT_TIMESTAMP,last_result='empty',empty_count=quality_refresh_state.empty_count+1,next_retry_at=datetime('now','+6 hours')").bind(row.sku).run();
+      }
       refreshedSkus.push(row.sku);
     } catch(error) {
       failed++;lastError=error;
+      await env.DB.prepare("INSERT INTO quality_refresh_state(sku,last_attempt,last_result,empty_count,next_retry_at) VALUES(?,CURRENT_TIMESTAMP,'error',0,datetime('now','+30 minutes')) ON CONFLICT(sku) DO UPDATE SET last_attempt=CURRENT_TIMESTAMP,last_result='error',next_retry_at=datetime('now','+30 minutes')").bind(row.sku).run();
       if(error?.status===401||error?.status===403)break;
     }
   }
   if(failed) await log(env,"WARN","attention-refresh",failed+" pembaruan rating/SLA gagal"+(lastError?": "+lastError.message:"")+".");
+  if(empty) await log(env,"INFO","attention-refresh",empty+" produk tidak punya kandidat seller; dicoba lagi setelah 6 jam.");
   if(refreshed) await log(env,"INFO","attention-refresh",refreshed+" produk diperbarui data rating/SLA-nya.");
-  return {refreshed,failed,skus:refreshedSkus};
+  return {refreshed,empty,failed,skus:refreshedSkus};
 }
 async function rankedOptions(env, sku, refresh = true) {
   const entry = await env.DB.prepare("SELECT product_id FROM products WHERE sku=?").bind(sku).first();
