@@ -365,7 +365,7 @@ test("materialized attention cache avoids full seller fanout on overview",()=>{
   assert.match(source,/async function markAttentionDirty/);
   assert.match(source,/async function refreshAttentionCache/);
   assert.match(source,/async function attentionSummary/);
-  assert.match(source,/conn\(env\),attentionSummary\(env\)/);
+  assert.match(source,/conn\(env\),attentionSummary\(env,cfg\)/);
 });
 
 test("auto-switch reads only fresh actionable cached attention targets",()=>{
@@ -598,4 +598,21 @@ test("product detail materialization uses the same rejected-target and replaceme
   assert.match(source,/SELECT status,target_seller_id,started_at FROM switch_operations WHERE sku=\?/);
   assert.match(source,/const policyOptions=rejectedId\?d\.options\.filter/);
   assert.match(source,/const replacement=policyOptions\.find\(x=>x\.eligible&&String\(x\.seller_id\)!==currentId\)/);
+});
+
+
+test("overview actionable count shares the Auto Switch queue predicate",()=>{
+  assert.match(source,/const ACTIONABLE_ATTENTION_FROM=/);
+  assert.match(source,/async function actionableAttentionCount/);
+  assert.match(source,/async function actionableAttentionRows/);
+  assert.match(source,/autoSwitchReady:autoReady/);
+  assert.match(source,/actionableAttentionCount\(env,config\)/);
+  assert.match(source,/actionableAttentionRows\(env,cfg,limit\)/);
+});
+
+test("product API exposes the same actionable Auto Switch filter",()=>{
+  assert.match(source,/status==="actionable"/);
+  assert.match(source,/a\.best_candidate_seller IS NOT NULL/);
+  assert.match(source,/autoSwitchCooldownCutoff\(cfg\)/);
+  assert.match(source,/LEFT JOIN switch_operations op ON op\.sku=p\.sku/);
 });
