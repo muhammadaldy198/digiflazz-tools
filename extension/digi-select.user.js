@@ -22,7 +22,7 @@
   const KEY = "digiTools.autoSeller.v1";
   const SYNC_KEY = "digiTools.syncedSellerConfig.v1";
   const BROWSER_DEFAULTS = {enabled:true,saveMode:"manual",autoServiceCode:true};
-  const RANK_DEFAULTS = {minRating:4,minReviews:0,priceTolerancePercent:2,preferred:[],blocked:[],syncedAt:null};
+  const RANK_DEFAULTS = {minRating:4,minReviews:0,priceTolerancePercent:2,blocked:[],syncedAt:null};
   const DEFAULTS = {...BROWSER_DEFAULTS,...RANK_DEFAULTS};
   const str = value => String(value ?? "").trim();
   const names = value => new Set((Array.isArray(value)?value:str(value).split(/[\n,]/)).map(x=>str(x).toLowerCase()).filter(Boolean));
@@ -64,7 +64,7 @@
     return raw.startsWith("<")?Math.max(0,n-1):n;
   }
   function chooseSeller(choices, product, options) {
-    const cfg={...DEFAULTS,...options}, blocked=names(cfg.blocked), preferred=names(cfg.preferred);
+    const cfg={...DEFAULTS,...options}, blocked=names(cfg.blocked);
     const cap=Number(product?.max_price)>0?Number(product.max_price):Infinity;
     const minRating=Math.max(4,Math.min(5,Number(cfg.minRating)||4));
     const tolerance=Math.max(0,Math.min(20,Number(cfg.priceTolerancePercent)||0));
@@ -93,12 +93,12 @@
         return Number(b.reviewAvg||0)-Number(a.reviewAvg||0) ||
           b._reviews-a._reviews ||
           Number(a.price)-Number(b.price) ||
-          Number(preferred.has(str(b.seller).toLowerCase()))-Number(preferred.has(str(a.seller).toLowerCase()));
+          str(a.seller).localeCompare(str(b.seller),"id-ID",{sensitivity:"base",numeric:true});
       }
       return Number(a.price)-Number(b.price) ||
         Number(b.reviewAvg||0)-Number(a.reviewAvg||0) ||
         b._reviews-a._reviews ||
-        Number(preferred.has(str(b.seller).toLowerCase()))-Number(preferred.has(str(a.seller).toLowerCase()));
+        str(a.seller).localeCompare(str(b.seller),"id-ID",{sensitivity:"base",numeric:true});
     })[0] || null;
   }
 
@@ -306,7 +306,7 @@
       <div class="row"><span>Rating minimum</span><strong>${settings.minRating}</strong></div>
       <div class="row"><span>Ulasan minimum</span><strong>${settings.minReviews}</strong></div>
       <div class="row"><span>Toleransi harga</span><strong>${settings.priceTolerancePercent}%</strong></div>
-      <div class="row"><span>Prioritas / blokir</span><strong>${names(settings.preferred).size} / ${names(settings.blocked).size}</strong></div>
+      <div class="row"><span>Seller diblokir</span><strong>${names(settings.blocked).size}</strong></div>
       <div class="row"><span>Sinkron terakhir</span><strong>${synced}</strong></div>
       <label><input id="enabled" type="checkbox"> Aktifkan pemilihan seller di halaman Digiflazz</label>
       <label for="mode">Simpan perubahan produk</label><select id="mode"><option value="manual">Manual: tekan Simpan di Digiflazz</option><option value="auto">Otomatis setelah seller dipilih</option></select>
