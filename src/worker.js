@@ -1005,13 +1005,12 @@ async function autoSwitchBatch(env, requestedLimit) {
         noCandidate++;
         await log(env,"INFO","auto-switch",top&&String(top.seller_id)===currentId?"Seller saat ini masih kandidat terbaik; tidak dipindahkan.":"Tidak ada kandidat seller yang memenuhi aturan.",sku);
         results.push({sku,status:"no_candidate"});
-        await markAttentionDirty(env,[sku]);
         continue;
       }
       const changed=await switchSeller(env,sku,best.seller_id,"auto",selection);
       switched++;
       results.push({sku,status:"switched",seller:changed.seller,price:changed.price});
-      await markAttentionDirty(env,[sku]);
+      await refreshAttentionCache(env,cfg,[sku],1);
     } catch(error) {
       failed++;
       await log(env,"WARN","auto-switch",error.message,sku);
