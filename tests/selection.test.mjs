@@ -300,7 +300,7 @@ test("full scans rotate rating SLA coverage and update only materialized cache b
   assert.match(source,/ORDER BY CASE WHEN max\(o\.last_seen\) IS NULL THEN 0 ELSE 1 END ASC,max\(o\.last_seen\) ASC/);
   assert.match(source,/const qualityRefresh=await refreshAttentionCoverage\(env,cfg\.attentionRefreshBatchSize\)/);
   assert.match(source,/const cacheRefresh=await refreshAttentionCache\(env,cfg,null,100\)/);
-  assert.match(source,/attentionSummary\(env\)/);
+  assert.match(source,/attentionSummary\(env,cfg\)/);
 });
 
 
