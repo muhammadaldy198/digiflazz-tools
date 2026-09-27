@@ -412,3 +412,13 @@ test("product detail exposes Max Price policy and lock has explicit manual seman
   assert.match(source,/str\(body\.reason\)\|\|"manual"/);
   assert.match(source,/kind|automation-lock/);
 });
+
+
+test("auto-switch refreshes attention cache immediately after a successful switch",()=>{
+  assert.match(source,/results\.push\(\{sku,status:"switched",seller:changed\.seller,price:changed\.price\}\);\s*await refreshAttentionCache\(env,cfg,\[sku\],1\)/);
+});
+
+test("auto-switch no-candidate path does not dirty unchanged attention cache",()=>{
+  const block=source.slice(source.indexOf('if\(!best\) {'),source.indexOf('const changed=await switchSeller',source.indexOf('if\(!best\) {')));
+  assert.doesNotMatch(block,/markAttentionDirty/);
+});
