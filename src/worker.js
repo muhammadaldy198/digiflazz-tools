@@ -562,6 +562,8 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
     SELECT p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.last_seen,
       l.buyer_sku_code IS NOT NULL AS locked,
       op.status AS operation_status,
+      op.target_seller_id AS operation_target_seller_id,
+      op.started_at AS operation_started_at,
       json_extract(p.raw,'$.seller_sku_id') AS current_seller_sku_id,
       json_extract(p.raw,'$.start_cut_off') AS start_cut_off,
       json_extract(p.raw,'$.end_cut_off') AS end_cut_off,
@@ -616,18 +618,24 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
   }
   return rows.results.map(row=>{
     const options=optionsBySku.get(row.sku)||[];
+    const rejectedAt=row.operation_status==="error"&&row.operation_started_at
+      ?Date.parse(String(row.operation_started_at).replace(" ","T")+"Z")
+      :0;
+    const rejectedId=rejectedAt&&Date.now()-rejectedAt<6*3600000?str(row.operation_target_seller_id):"";
+    const policyOptions=rejectedId?options.filter(x=>String(x.seller_id)!==rejectedId):options;
     const rule=matchingRuleForProduct(row,rules);
-    const ranked=rank(row,options,preferences,rule,config,zoneBySku.get(row.sku)||null);
+    const ranked=rank(row,policyOptions,preferences,rule,config,zoneBySku.get(row.sku)||null);
     const current=ranked.find(x=>String(x.seller_id)===String(row.current_seller_sku_id))||null;
     const best=ranked.find(x=>x.eligible)||null;
+    const replacement=ranked.find(x=>x.eligible&&String(x.seller_id)!==String(row.current_seller_sku_id))||null;
     const attention_reasons=attentionReasons(row,config,new Date(),{ranked,current,best});
     return {
       ...row,
       nominal_value:productNominalValue(row),
-      best_candidate_seller:best?.seller_name||null,
-      best_candidate_price:best?.price??null,
-      best_candidate_rating:best?.rating??null,
-      best_candidate_sla:best?.sla_days??null,
+      best_candidate_seller:replacement?.seller_name||null,
+      best_candidate_price:replacement?.price??null,
+      best_candidate_rating:replacement?.rating??null,
+      best_candidate_sla:replacement?.sla_days??null,
       attention_reasons,
       needs_attention:attention_reasons.length>0
     };
@@ -973,6 +981,7 @@ async function autoSwitchBatch(env, requestedLimit) {
   const verified=await env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first();
   if(!verified) throw Error("Lakukan satu perpindahan seller manual yang berhasil sebelum menjalankan auto-switch.");
   const limit=Math.trunc(bounded(requestedLimit,1,10,cfg.autoSwitchBatchSize));
+  const cooldownCutoff=new Date(Date.now()-cfg.cooldownHours*3600000).toISOString().replace("T"," ").slice(0,19);
   const rows=await env.DB.prepare(`SELECT p.sku,p.last_seen,a.reasons_json
     FROM product_attention a
     JOIN products p ON p.sku=a.sku
@@ -980,9 +989,14 @@ async function autoSwitchBatch(env, requestedLimit) {
     LEFT JOIN switch_operations op ON op.sku=p.sku
     WHERE a.dirty=0 AND a.needs_attention=1 AND p.active=1
       AND p.max_price>0
+      AND a.best_candidate_seller IS NOT NULL
       AND l.buyer_sku_code IS NULL
       AND COALESCE(op.status,'') NOT IN ('pending','unknown')
-    ORDER BY p.last_seen ASC,p.sku ASC LIMIT ?`).bind(limit).all();
+      AND NOT EXISTS (
+        SELECT 1 FROM switch_history sh
+        WHERE sh.buyer_sku_code=p.sku AND sh.status='success' AND sh.created_at>?
+      )
+    ORDER BY p.last_seen ASC,p.sku ASC LIMIT ?`).bind(cooldownCutoff,limit).all();
   const targets=rows.results.map(row=>{
     let attention_reasons=[];
     try { attention_reasons=JSON.parse(row.reasons_json||"[]"); } catch {}
