@@ -282,14 +282,25 @@ async function scan(env, reason = "manual") {
     let issues = 0;
     for (let i=0;i<products.length;i+=100) {
       const chunk = products.slice(i,i+100);
-      const old = await env.DB.prepare("SELECT sku,price,seller_name,active FROM products WHERE sku IN (" + chunk.map(()=>"?").join(",") + ")").bind(...chunk.map(x=>x.sku)).all();
+      const old = await env.DB.prepare("SELECT sku,price,max_price,seller_name,seller_active,active,stock,unlimited_stock,raw FROM products WHERE sku IN (" + chunk.map(()=>"?").join(",") + ")").bind(...chunk.map(x=>x.sku)).all();
       const before = new Map(old.results.map(x=>[x.sku,x]));
-      const queries = [];
+      const queries = [],chunkDirty=[];
       for (const p of chunk) {
         const previous = before.get(p.sku);
-        const problem = !p.seller_name || !p.seller_active || (p.max_price > 0 && p.price > p.max_price) || (!p.unlimited_stock && p.stock === 0);
-        if (problem) issues++;
-        queries.push(env.DB.prepare("INSERT INTO products(sku,product_id,name,category,brand,product_type,seller_id,seller_name,price,max_price,active,seller_active,stock,unlimited_stock,end_cut_off,raw,last_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(sku) DO UPDATE SET product_id=excluded.product_id,name=excluded.name,category=excluded.category,brand=excluded.brand,product_type=excluded.product_type,seller_id=excluded.seller_id,seller_name=excluded.seller_name,price=excluded.price,max_price=excluded.max_price,active=excluded.active,seller_active=excluded.seller_active,stock=excluded.stock,unlimited_stock=excluded.unlimited_stock,end_cut_off=excluded.end_cut_off,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_id,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.end_cut_off,p.raw));
+        const previousRaw=previous?JSON.parse(previous.raw):null,currentRaw=JSON.parse(p.raw);
+        const changed=!previous ||
+          Number(previous.price)!==Number(p.price) ||
+          Number(previous.max_price)!==Number(p.max_price) ||
+          str(previous.seller_name)!==str(p.seller_name) ||
+          Number(previous.seller_active)!==Number(p.seller_active) ||
+          Number(previous.active)!==Number(p.active) ||
+          Number(previous.stock)!==Number(p.stock) ||
+          Number(previous.unlimited_stock)!==Number(p.unlimited_stock) ||
+          String(previousRaw?.seller_sku_id??"")!==String(currentRaw?.seller_sku_id??"") ||
+          str(previousRaw?.start_cut_off)!==str(currentRaw?.start_cut_off) ||
+          str(previousRaw?.end_cut_off)!==str(currentRaw?.end_cut_off);
+        if(changed)chunkDirty.push(p.sku);
+        queries.push(env.DB.prepare("INSERT INTO products(sku,product_id,name,category,brand,product_type,seller_id,seller_name,price,max_price,active,seller_active,stock,unlimited_stock,end_cut_off,raw,nominal_value,last_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(sku) DO UPDATE SET product_id=excluded.product_id,name=excluded.name,category=excluded.category,brand=excluded.brand,product_type=excluded.product_type,seller_id=excluded.seller_id,seller_name=excluded.seller_name,price=excluded.price,max_price=excluded.max_price,active=excluded.active,seller_active=excluded.seller_active,stock=excluded.stock,unlimited_stock=excluded.unlimited_stock,end_cut_off=excluded.end_cut_off,raw=excluded.raw,nominal_value=excluded.nominal_value,last_seen=CURRENT_TIMESTAMP").bind(p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_id,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.end_cut_off,p.raw,Number.isFinite(productNominalValue(p))?productNominalValue(p):null));
         if (previous && previous.price !== p.price) {
           queries.push(env.DB.prepare("INSERT INTO price_history(buyer_sku_code,seller_name,price) VALUES(?,?,?)").bind(p.sku,p.seller_name,p.price));
           queries.push(env.DB.prepare("INSERT INTO events(level,kind,sku,message) VALUES('INFO','price',?,?)").bind(p.sku,"Harga berubah Rp"+previous.price+" → Rp"+p.price));
@@ -303,6 +314,7 @@ async function scan(env, reason = "manual") {
         }
       }
       for (let j=0;j<queries.length;j+=80) await env.DB.batch(queries.slice(j,j+80));
+      if(chunkDirty.length)await markAttentionDirty(env,chunkDirty);
     }
     const stale=await env.DB.prepare("SELECT sku FROM products WHERE last_seen < (SELECT started_at FROM scan_runs WHERE id=?)").bind(runId).all();
     if(stale.results.length) {
@@ -311,6 +323,7 @@ async function scan(env, reason = "manual") {
         const marks=skus.map(()=>"?").join(",");
         await env.DB.batch([
           env.DB.prepare("DELETE FROM seller_options WHERE sku IN ("+marks+")").bind(...skus),
+          env.DB.prepare("DELETE FROM product_attention WHERE sku IN ("+marks+")").bind(...skus),
           env.DB.prepare("DELETE FROM products WHERE sku IN ("+marks+")").bind(...skus)
         ]);
       }
@@ -336,11 +349,13 @@ async function scan(env, reason = "manual") {
     for (let i=0;i<sellerStmts.length;i+=80) await env.DB.batch(sellerStmts.slice(i,i+80));
     const cfg=await settings(env);
     const qualityRefresh=await refreshAttentionCoverage(env,cfg.attentionRefreshBatchSize);
-    const attention=await loadAttentionRows(env,cfg);
-    issues=attention.filter(x=>x.needs_attention).length;
+    if(qualityRefresh.skus?.length)await markAttentionDirty(env,qualityRefresh.skus);
+    const cacheRefresh=await refreshAttentionCache(env,cfg,null,100);
+    const summary=await attentionSummary(env);
+    issues=summary.issues;
     await env.DB.prepare("UPDATE scan_runs SET status='success',finished_at=CURRENT_TIMESTAMP,total=?,issues=?,message=? WHERE id=?").bind(products.length,issues,reason,runId).run();
-    await log(env,"INFO","scan",products.length+" produk dipindai; "+issues+" perlu perhatian; "+qualityRefresh.refreshed+" rating/SLA diperbarui.");
-    return { ok:true,total:products.length,issues,qualityRefreshed:qualityRefresh.refreshed };
+    await log(env,"INFO","scan",products.length+" produk dipindai; "+issues+" perlu perhatian; "+qualityRefresh.refreshed+" rating/SLA diperbarui; "+cacheRefresh.refreshed+" cache perhatian dihitung.");
+    return { ok:true,total:products.length,issues,qualityRefreshed:qualityRefresh.refreshed,attentionRefreshed:cacheRefresh.refreshed,attentionPending:summary.attentionPending };
   } catch (error) {
     await env.DB.prepare("UPDATE scan_runs SET status='error',finished_at=CURRENT_TIMESTAMP,message=? WHERE id=?").bind(error.message,runId).run();
     await log(env,"ERROR","scan",error.message);
