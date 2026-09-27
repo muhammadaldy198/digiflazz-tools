@@ -119,8 +119,18 @@ async function remote(env, path, htmlRequest = false) {
   delete headers.host;
   if (htmlRequest) delete headers["x-requested-with"];
   const res = await fetch(target, { method: "GET", headers, redirect: "manual", signal: AbortSignal.timeout(20000) });
-  if (res.status === 401 || res.status === 403 || (res.status >= 300 && res.status < 400)) throw Error("Sesi Digiflazz kedaluwarsa atau ditolak (HTTP " + res.status + ").");
-  if (!res.ok) throw Error("Digiflazz mengembalikan HTTP " + res.status + " untuk " + target.pathname);
+  if (res.status === 401 || (res.status >= 300 && res.status < 400)) {
+    const error=Error("Sesi Digiflazz kedaluwarsa atau perlu diperbarui (HTTP " + res.status + ").");
+    error.status=res.status; error.endpoint=target.pathname; throw error;
+  }
+  if (res.status === 403) {
+    const error=Error("Digiflazz menolak akses endpoint " + target.pathname + " (HTTP 403). Sesi belum tentu kedaluwarsa.");
+    error.status=403; error.endpoint=target.pathname; throw error;
+  }
+  if (!res.ok) {
+    const error=Error("Digiflazz mengembalikan HTTP " + res.status + " untuk " + target.pathname);
+    error.status=res.status; error.endpoint=target.pathname; throw error;
+  }
   return res;
 }
 async function remoteJson(env, path) {
@@ -242,6 +252,7 @@ function validateSettings(input, current) {
   return next;
 }
 async function scan(env, reason = "manual") {
+  await env.DB.prepare("UPDATE scan_runs SET status='error',finished_at=CURRENT_TIMESTAMP,message='Invocation sebelumnya berhenti sebelum scan selesai.' WHERE status='running' AND started_at < datetime('now','-20 minutes')").run();
   const created = await env.DB.prepare("INSERT INTO scan_runs(status) VALUES('running')").run();
   const runId = created.meta.last_row_id;
   try {
@@ -304,12 +315,22 @@ async function scan(env, reason = "manual") {
       }
       await log(env,"INFO","catalog-cleanup",stale.results.length+" produk lama dihapus karena tidak ada lagi di katalog Digiflazz.");
     }
-    try {
-      const sd = await remoteJson(env, "/api/v1/buyer/seller");
-      const sellers = listOf(sd,["data.data","data.sellers","data","sellers","result.data","result"]) || [];
-      const stmts = sellers.map(normalizeSeller).filter(Boolean).map(x=>env.DB.prepare("INSERT INTO sellers(seller_id,name,rating,review_count,product_count,invoice,raw,last_seen) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(seller_id) DO UPDATE SET name=excluded.name,rating=excluded.rating,review_count=excluded.review_count,product_count=excluded.product_count,invoice=excluded.invoice,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(x.seller_id,x.name,x.rating,x.review_count,x.product_count,x.invoice,x.raw));
-      for(let i=0;i<stmts.length;i+=80) await env.DB.batch(stmts.slice(i,i+80));
-    } catch (error) { await log(env,"WARN","sellers",error.message); }
+    const sellerRetry=await env.DB.prepare("SELECT value FROM app_settings WHERE key='seller_directory_retry_after'").first();
+    if(!sellerRetry || Date.now()>=Date.parse(sellerRetry.value)) {
+      try {
+        const sd = await remoteJson(env, "/api/v1/buyer/seller");
+        const sellers = listOf(sd,["data.data","data.sellers","data","sellers","result.data","result"]) || [];
+        const stmts = sellers.map(normalizeSeller).filter(Boolean).map(x=>env.DB.prepare("INSERT INTO sellers(seller_id,name,rating,review_count,product_count,invoice,raw,last_seen) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(seller_id) DO UPDATE SET name=excluded.name,rating=excluded.rating,review_count=excluded.review_count,product_count=excluded.product_count,invoice=excluded.invoice,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(x.seller_id,x.name,x.rating,x.review_count,x.product_count,x.invoice,x.raw));
+        for(let i=0;i<stmts.length;i+=80) await env.DB.batch(stmts.slice(i,i+80));
+        await env.DB.prepare("DELETE FROM app_settings WHERE key='seller_directory_retry_after'").run();
+      } catch (error) {
+        if(error?.status===403) {
+          const retryAt=new Date(Date.now()+24*3600000).toISOString();
+          await env.DB.prepare("INSERT INTO app_settings(key,value) VALUES('seller_directory_retry_after',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(retryAt).run();
+          await log(env,"WARN","sellers","Endpoint direktori seller Digiflazz ditolak HTTP 403; scan produk tetap berjalan. Dicoba lagi setelah 24 jam.");
+        } else await log(env,"WARN","sellers",error.message);
+      }
+    }
     const sellerStmts = [...new Set(products.map(x=>x.seller_name).filter(Boolean))].map(name=>env.DB.prepare("INSERT INTO sellers(seller_id,name,raw) VALUES(?,?,?) ON CONFLICT(seller_id) DO NOTHING").bind(name,name,"{}"));
     for (let i=0;i<sellerStmts.length;i+=80) await env.DB.batch(sellerStmts.slice(i,i+80));
     await env.DB.prepare("UPDATE scan_runs SET status='success',finished_at=CURRENT_TIMESTAMP,total=?,issues=?,message=? WHERE id=?").bind(products.length,issues,reason,runId).run();
@@ -445,8 +466,8 @@ function changedProduct(current, choice, preserveMaxPrice=true, maxPriceOffset=0
   }
   return updated;
 }
-async function switchSeller(env, sku, sellerId, reason) {
-  const {product,config,options} = await rankedOptions(env,sku);
+async function switchSeller(env, sku, sellerId, reason, preparedSelection = null) {
+  const {product,config,options} = preparedSelection || await rankedOptions(env,sku);
   if (reason === "auto" && (product.locked || !config.autoSwitch || config.dryRun)) throw Error("Perpindahan otomatis sedang nonaktif atau produk terkunci.");
   const candidate=options.find(x=>x.seller_id===sellerId);
   if (!candidate || !candidate.eligible) throw Error("Seller tujuan tidak memenuhi aturan harga, rating, stok, atau status.");
@@ -505,7 +526,7 @@ async function autoSwitchBatch(env, requestedLimit) {
         results.push({sku,status:"no_candidate"});
         continue;
       }
-      const changed=await switchSeller(env,sku,best.seller_id,"auto");
+      const changed=await switchSeller(env,sku,best.seller_id,"auto",selection);
       switched++;
       results.push({sku,status:"switched",seller:changed.seller,price:changed.price});
     } catch(error) {
@@ -775,47 +796,45 @@ export default {
   },
   async scheduled(event,env) {
     try {
+      await env.DB.prepare("UPDATE scan_runs SET status='error',finished_at=CURRENT_TIMESTAMP,message='Invocation sebelumnya berhenti sebelum scan selesai.' WHERE status='running' AND started_at < datetime('now','-20 minutes')").run();
       const cfg=await settings(env);
       const last=await env.DB.prepare("SELECT finished_at FROM scan_runs WHERE status='success' ORDER BY id DESC LIMIT 1").first();
-      const due=!last || Date.now()-Date.parse(last.finished_at.replace(" ","T")+"Z")>=cfg.scanIntervalMinutes*60000;
-      if(cfg.scanEnabled&&due) {
+      const lastMs=last?.finished_at?Date.parse(last.finished_at.replace(" ","T")+"Z"):0;
+      const age=lastMs?Date.now()-lastMs:Infinity;
+      const liveAuto=cfg.autoSwitch&&!cfg.dryRun;
+      const scanCadence=cfg.scanIntervalMinutes*60000*(liveAuto?2:1);
+
+      // Never combine a full catalog scan and live auto-switch in the same invocation.
+      // On the Free plan this keeps external/internal subrequests safely separated.
+      if(cfg.scanEnabled && age>=scanCadence) {
         await scan(env,"cron");
-        const probe=await env.DB.prepare("SELECT sku,product_id FROM products WHERE seller_name='' OR seller_active=0 OR (max_price>0 AND price>max_price) OR (stock=0 AND unlimited_stock=0) ORDER BY last_seen DESC LIMIT 1").first();
-        if(probe) {
-          try { const count=await refreshOptions(env,probe.sku,probe.product_id);await log(env,"INFO","seller-options",count+" kandidat dibaca untuk satu produk yang perlu perhatian.",probe.sku); }
-          catch(error) { await log(env,"WARN","seller-options",error.message,probe.sku); }
-          const preflight=await env.DB.prepare("SELECT value FROM app_settings WHERE key='search_preflight_ok'").first();
-          if(!preflight) {
-            try {
-              const current=await freshProduct(env,probe.sku);
-              if(!current.id || !current.seller_sku_id) throw Error("Data pencarian SKU tidak berisi ID dan seller.");
-              await env.DB.prepare("INSERT INTO app_settings(key,value) VALUES('search_preflight_ok','true')").run();
-              await log(env,"INFO","search-preflight","Pencarian ulang SKU Digiflazz terverifikasi.",probe.sku);
-            } catch(error) { await log(env,"WARN","search-preflight",error.message,probe.sku); }
-          }
-        }
-        if(cfg.proactiveScan) {
-          const sample=await env.DB.prepare("SELECT p.sku FROM products p LEFT JOIN seller_options o ON o.sku=p.sku WHERE p.active=1 AND p.seller_active=1 AND p.price>0 AND (p.stock>0 OR p.unlimited_stock=1) GROUP BY p.sku ORDER BY min(COALESCE(o.last_seen,'1970-01-01')) ASC LIMIT ?").bind(Math.min(10,cfg.autoSwitchBatchSize)).all();
-          for(const {sku} of sample.results) {
-            try {
-              const data=await rankedOptions(env,sku);
-              const current=JSON.parse(data.product.raw);
-              const best=data.options.find(o=>o.eligible && o.seller_id!==String(current.seller_sku_id) && o.price<data.product.price*(1-cfg.minSavingsPercent/100));
-              if(best) {
-                const saving=Math.round((1-best.price/data.product.price)*100);
-                await log(env,"WARN","better_seller_available",best.seller_name+" lebih murah "+saving+"% (Rp"+best.price+").",sku);
-                if(cfg.autoSwitch && !cfg.dryRun && cfg.reoptimizeHours>0) await switchSeller(env,sku,best.seller_id,"auto");
-              }
-            } catch(error) { await log(env,"WARN","proactive",error.message,sku); }
-          }
-        }
-        if(cfg.autoSwitch && !cfg.dryRun) {
-          try {
-            const summary=await autoSwitchBatch(env,cfg.autoSwitchBatchSize);
-            if(summary.examined) await log(env,"INFO","auto-switch","Batch otomatis: "+summary.switched+" pindah, "+summary.noCandidate+" tanpa kandidat, "+summary.failed+" gagal.");
-          } catch(error) { await log(env,"WARN","auto-switch",error.message); }
-        }
+        return;
       }
+
+      if(liveAuto) {
+        try {
+          const summary=await autoSwitchBatch(env,cfg.autoSwitchBatchSize);
+          if(summary.examined) await log(env,"INFO","auto-switch","Batch otomatis: "+summary.switched+" pindah, "+summary.noCandidate+" tanpa kandidat, "+summary.failed+" gagal.");
+        } catch(error) { await log(env,"WARN","auto-switch",error.message); }
+        return;
+      }
+
+      if(cfg.proactiveScan) {
+        const sample=await env.DB.prepare("SELECT p.sku FROM products p LEFT JOIN seller_options o ON o.sku=p.sku WHERE p.active=1 AND p.seller_active=1 AND p.price>0 AND (p.stock>0 OR p.unlimited_stock=1) GROUP BY p.sku ORDER BY min(COALESCE(o.last_seen,'1970-01-01')) ASC LIMIT 1").all();
+        for(const {sku} of sample.results) {
+          try {
+            const data=await rankedOptions(env,sku);
+            const current=JSON.parse(data.product.raw);
+            const best=data.options.find(o=>o.eligible && o.seller_id!==String(current.seller_sku_id) && o.price<data.product.price*(1-cfg.minSavingsPercent/100));
+            if(best) {
+              const saving=Math.round((1-best.price/data.product.price)*100);
+              await log(env,"WARN","better_seller_available",best.seller_name+" lebih murah "+saving+"% (Rp"+best.price+").",sku);
+            }
+          } catch(error) { await log(env,"WARN","proactive",error.message,sku); }
+        }
+        return;
+      }
+
       const known=await env.DB.prepare("SELECT count(*) total FROM api_discovery").first();
       const previous=await env.DB.prepare("SELECT value FROM app_settings WHERE key='discovery_last_attempt'").first();
       if(known.total===0&&await conn(env)&&(!previous||Date.now()-Date.parse(previous.value)>86400000)) {
@@ -823,5 +842,4 @@ export default {
         await discover(env);
       }
     } catch(error) { try { await log(env,"ERROR","cron",error.message); } catch {} }
-  }
-};
+  }};
