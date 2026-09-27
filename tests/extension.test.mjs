@@ -81,18 +81,17 @@ test("observes Digiflazz seller dialog without replacing its native button handl
 test("Firefox Android userscript uses forced content-context injection and visible panel",()=>{
   assert.match(source,/\/\/ @inject-into\s+content/);
   assert.match(source,/\/\/ @run-at\s+document-end/);
-  assert.match(source,/Auto Seller v1\.9 aktif/);
+  assert.match(source,/Auto Seller v2\.0 aktif/);
   assert.match(source,/wrappedJSObject/);
 });
 
 
 test("batch SKU UI replaces one-by-one generator",()=>{
-  assert.match(source,/Buat SKU otomatis untuk semua produk/);
+  assert.match(source,/Isi SKU otomatis/);
   assert.match(source,/Isi semua SKU di halaman/);
   assert.doesNotMatch(source,/id="code-game"/);
   assert.doesNotMatch(source,/id="code-product"/);
 });
-
 
 test("never monkeypatches fetchSellers",()=>{
   assert.doesNotMatch(source,/vm\.fetchSellers\s*=/);
@@ -134,16 +133,23 @@ test("userscript review tie-break understands approximate counts",()=>{
   assert.equal(reviewValue("30+"),30);
 });
 
-test("userscript panel exposes configurable price tolerance",()=>{
-  assert.match(source,/id="tolerance"/);
-  assert.match(source,/priceTolerancePercent:2/);
+test("userscript syncs seller policy from authenticated tools dashboard",()=>{
+  assert.match(source,/https:\/\/tools\.lfamiliastore\.my\.id\/\*/);
+  assert.match(source,/GM_getValue/);
+  assert.match(source,/GM_setValue/);
+  assert.match(source,/\/api\/browser-config/);
+  assert.match(source,/setInterval\(syncFromTools,15000\)/);
+  assert.doesNotMatch(source,/id="rating"/);
+  assert.doesNotMatch(source,/id="reviews"/);
+  assert.doesNotMatch(source,/id="tolerance"/);
+  assert.doesNotMatch(source,/id="preferred"/);
+  assert.doesNotMatch(source,/id="blocked"/);
 });
-
 
 test("userscript has no global Max Price controls or calculation",()=>{
   assert.doesNotMatch(source,/autoFillMaxPrice|maxPriceOffset|maxPriceForSeller/);
   assert.doesNotMatch(source,/id="fill"|id="offset"/);
-  assert.match(source,/Max Price tidak diubah oleh skrip/);
+  assert.match(source,/Max Price tidak diubah/);
 });
 
 
@@ -152,4 +158,19 @@ test("userscript uses only per-product Max Price as seller price ceiling",()=>{
   assert.doesNotMatch(source,/id="cap"/);
   assert.match(source,/const cap=Number\(product\?\.max_price\)>0\?Number\(product\.max_price\):Infinity/);
   assert.match(source,/Satu-satunya batas harga adalah Max Price produk di Digiflazz/);
+});
+
+
+test("synced blocked and preferred seller lists accept arrays from backend",()=>{
+  const options=[
+    candidate("blocked","Blocked Seller",9000,5,"100+","H+0"),
+    candidate("preferred","Preferred Seller",9000,5,"100+","H+0"),
+    candidate("other","Other Seller",9000,5,"100+","H+0")
+  ];
+  assert.equal(chooseSeller(options,product,{blocked:["Blocked Seller"],preferred:["Preferred Seller"]}).id,"preferred");
+});
+
+test("old local ranking controls are no longer persisted by browser settings",()=>{
+  assert.match(source,/const browser=\{enabled:get\("enabled"\)\.checked,saveMode:get\("mode"\)\.value,autoServiceCode:get\("code"\)\.checked\}/);
+  assert.match(source,/Aturan seller tetap mengikuti dashboard/);
 });
