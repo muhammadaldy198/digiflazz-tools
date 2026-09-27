@@ -761,10 +761,12 @@ async function refreshAttentionCoverage(env, requestedLimit=5) {
     LIMIT ?
   `).bind(limit).all();
   let refreshed=0,failed=0,lastError=null;
+  const refreshedSkus=[];
   for(const row of rows.results) {
     try {
       await refreshOptions(env,row.sku,row.product_id);
       refreshed++;
+      refreshedSkus.push(row.sku);
     } catch(error) {
       failed++;lastError=error;
       if(error?.status===401||error?.status===403)break;
@@ -772,7 +774,7 @@ async function refreshAttentionCoverage(env, requestedLimit=5) {
   }
   if(failed) await log(env,"WARN","attention-refresh",failed+" pembaruan rating/SLA gagal"+(lastError?": "+lastError.message:"")+".");
   if(refreshed) await log(env,"INFO","attention-refresh",refreshed+" produk diperbarui data rating/SLA-nya.");
-  return {refreshed,failed};
+  return {refreshed,failed,skus:refreshedSkus};
 }
 async function rankedOptions(env, sku, refresh = true) {
   const entry = await env.DB.prepare("SELECT product_id FROM products WHERE sku=?").bind(sku).first();
