@@ -548,31 +548,45 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
   ).bind(...args).all();
   if(!rows.results.length)return [];
   const skus=rows.results.map(x=>x.sku);
-  const placeholders=skus.map(()=>"?").join(",");
-  const [optionRows,preferences,rules,zoneRows]=await Promise.all([
-    env.DB.prepare(`SELECT sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description,
+  const chunks=[];
+  for(let i=0;i<skus.length;i+=75)chunks.push(skus.slice(i,i+75));
+  const optionStatements=chunks.map(chunk=>{
+    const placeholders=chunk.map(()=>"?").join(",");
+    return env.DB.prepare(`SELECT sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description,
       json_extract(raw,'$.rating_qty') AS review_count,
       json_extract(raw,'$.status_sellerSku') AS seller_status,
       json_extract(raw,'$.start_cut_off') AS start_cut_off,
       json_extract(raw,'$.end_cut_off') AS end_cut_off
-      FROM seller_options WHERE sku IN (`+placeholders+`)`).bind(...skus).all(),
-    env.DB.prepare("SELECT seller_name,mode FROM seller_preferences").all(),
-    env.DB.prepare("SELECT * FROM seller_rules WHERE is_active=1").all(),
-    env.DB.prepare("SELECT a.sku,z.patterns FROM zone_assignments a JOIN zones z ON z.id=a.zone_id WHERE a.sku IN ("+placeholders+")").bind(...skus).all()
+      FROM seller_options WHERE sku IN (`+placeholders+`)`).bind(...chunk);
+  });
+  const zoneStatements=chunks.map(chunk=>{
+    const placeholders=chunk.map(()=>"?").join(",");
+    return env.DB.prepare("SELECT a.sku,z.patterns FROM zone_assignments a JOIN zones z ON z.id=a.zone_id WHERE a.sku IN ("+placeholders+")").bind(...chunk);
+  });
+  const batch=await env.DB.batch([
+    ...optionStatements,
+    ...zoneStatements,
+    env.DB.prepare("SELECT seller_name,mode FROM seller_preferences"),
+    env.DB.prepare("SELECT * FROM seller_rules WHERE is_active=1")
   ]);
+  const optionRows=batch.slice(0,optionStatements.length).flatMap(result=>result.results||[]);
+  const zoneOffset=optionStatements.length;
+  const zoneRows=batch.slice(zoneOffset,zoneOffset+zoneStatements.length).flatMap(result=>result.results||[]);
+  const preferences=batch[zoneOffset+zoneStatements.length]?.results||[];
+  const rules=batch[zoneOffset+zoneStatements.length+1]?.results||[];
   const optionsBySku=new Map();
-  for(const option of optionRows.results) {
+  for(const option of optionRows) {
     if(!optionsBySku.has(option.sku))optionsBySku.set(option.sku,[]);
     optionsBySku.get(option.sku).push(option);
   }
   const zoneBySku=new Map();
-  for(const row of zoneRows.results) {
+  for(const row of zoneRows) {
     try { zoneBySku.set(row.sku,{patterns:JSON.parse(row.patterns)}); } catch {}
   }
   return rows.results.map(row=>{
     const options=optionsBySku.get(row.sku)||[];
-    const rule=matchingRuleForProduct(row,rules.results);
-    const ranked=rank(row,options,preferences.results,rule,config,zoneBySku.get(row.sku)||null);
+    const rule=matchingRuleForProduct(row,rules);
+    const ranked=rank(row,options,preferences,rule,config,zoneBySku.get(row.sku)||null);
     const current=ranked.find(x=>String(x.seller_id)===String(row.current_seller_sku_id))||null;
     const best=ranked.find(x=>x.eligible)||null;
     const attention_reasons=attentionReasons(row,config,new Date(),{ranked,current,best});

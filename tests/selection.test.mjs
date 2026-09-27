@@ -348,3 +348,10 @@ test("product API sorts before pagination and supports active inactive filters",
   assert.match(source,/status==="active"/);
   assert.match(source,/status==="inactive"/);
 });
+
+
+test("attention queries chunk large SKU lists below D1 SQL variable limits",()=>{
+  assert.match(source,/for\(let i=0;i<skus\.length;i\+=75\)chunks\.push\(skus\.slice\(i,i\+75\)\)/);
+  assert.match(source,/const batch=await env\.DB\.batch\(/);
+  assert.doesNotMatch(source,/const placeholders=skus\.map\(\(\)=>"\?"\)\.join\(","\)/);
+});
