@@ -4,12 +4,11 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const DEFAULTS = {
   scanEnabled: false, dryRun: true, autoSwitch: false, scanIntervalMinutes: 5,
-  minRating: 4, minReviews: 0, priceCap: 0, preserveMaxPrice: true,
-  saveMode: "manual", autoFillMaxPrice: true, proactiveScan: false,
+  minRating: 4, minReviews: 0, priceCap: 0,
+  saveMode: "manual", proactiveScan: false,
   reoptimizeHours: 0, minSavingsPercent: 5, cooldownHours: 24, autoSwitchBatchSize: 5, attentionRefreshBatchSize: 5,
   weights: { price: 40, connection: 30, sla: 20, stock: 10 },
-  priceTolerancePercent: 2,
-  maxPriceOffset: 0
+  priceTolerancePercent: 2
 };
 const secureHeaders = {
   "cache-control": "no-store", "x-content-type-options": "nosniff",
@@ -236,11 +235,8 @@ function validateSettings(input, current) {
   const next = { ...current };
   for (const [key, value] of Object.entries(input)) {
     if (!(key in DEFAULTS)) continue;
-    if (["scanEnabled","dryRun","autoSwitch","preserveMaxPrice","autoFillMaxPrice","proactiveScan"].includes(key)) next[key] = bool(value);
-    else if (key === "maxPriceOffset") {
-      if(!Number.isSafeInteger(Number(value))||Number(value)<0||Number(value)>1000000000)throw Error("Tambahan max price harus angka rupiah bulat antara 0 dan 1 miliar.");
-      next[key]=Number(value);
-    } else if (["minRating","minReviews","priceCap","scanIntervalMinutes","reoptimizeHours","minSavingsPercent","cooldownHours","autoSwitchBatchSize","attentionRefreshBatchSize","priceTolerancePercent"].includes(key)) {
+    if (["scanEnabled","dryRun","autoSwitch","proactiveScan"].includes(key)) next[key] = bool(value);
+    else if (["minRating","minReviews","priceCap","scanIntervalMinutes","reoptimizeHours","minSavingsPercent","cooldownHours","autoSwitchBatchSize","attentionRefreshBatchSize","priceTolerancePercent"].includes(key)) {
       const limits = {minRating:[4,5],minReviews:[0,100000],priceCap:[0,1000000000],scanIntervalMinutes:[5,1440],reoptimizeHours:[0,720],minSavingsPercent:[0,100],cooldownHours:[1,720],autoSwitchBatchSize:[1,10],attentionRefreshBatchSize:[1,10],priceTolerancePercent:[0,20]};
       next[key] = bounded(value, ...limits[key], current[key]);
     } else if (key === "saveMode" && ["manual","auto"].includes(value)) next[key] = value;
@@ -400,9 +396,7 @@ function reviewValue(value) {
 function rank(product, rows, prefs, rule, config, zone) {
   const blocked = new Set(prefs.filter(p=>p.mode==="blocked").map(p=>p.seller_name.toLowerCase()));
   const preferred = new Set(prefs.filter(p=>p.mode==="preferred").map(p=>p.seller_name.toLowerCase()));
-  const hasHealthState = Object.prototype.hasOwnProperty.call(product,"seller_name") || Object.prototype.hasOwnProperty.call(product,"seller_active") || Object.prototype.hasOwnProperty.call(product,"stock");
-  const unhealthy = hasHealthState && (!product.seller_name || product.seller_active === 0 || (product.max_price > 0 && product.price > product.max_price) || (!product.unlimited_stock && product.stock === 0));
-  const max = Math.min(...[rule?.max_price, unhealthy ? 0 : product.max_price, config.priceCap].filter(x=>Number(x)>0).map(Number), Infinity);
+  const max = Math.min(...[rule?.max_price, product.max_price, config.priceCap].filter(x=>Number(x)>0).map(Number), Infinity);
   const configuredMinRating=Number(rule?.min_rating ?? config.minRating ?? 4);
   const minRating=Math.max(4,Math.min(5,Number.isFinite(configuredMinRating)?configuredMinRating:4));
   const tolerance=bounded(config.priceTolerancePercent,0,20,2);
@@ -901,7 +895,7 @@ function serviceCode(game,product) {
   if(!prefix||!Number.isSafeInteger(value)||value<1)return null;
   return prefix+String(value);
 }
-function changedProduct(current, choice, preserveMaxPrice=true, maxPriceOffset=0, preserveHigherMax=false) {
+function changedProduct(current, choice) {
   const updated = { ...current };
   for (const [field, value] of Object.entries({
     seller:choice.seller,seller_sku_id:choice.id ?? choice.seller_sku_id,seller_sku_id_int:choice.id_int ?? choice.seller_sku_id_int,
@@ -913,11 +907,7 @@ function changedProduct(current, choice, preserveMaxPrice=true, maxPriceOffset=0
     multi:choice.connectionType!=="jabber"&&choice.multi,multi_counter:choice.multi_counter,
     change:true
   })) if (value !== undefined) updated[field] = value;
-  if (!preserveMaxPrice) {
-    const max=Number(choice.price)+Number(maxPriceOffset);
-    if(!Number.isSafeInteger(max)||max<1||max>1000000000) throw Error("Harga maksimum hasil penambahan tidak valid.");
-    updated.max_price=preserveHigherMax?Math.max(Number(updated.max_price)||0,max):max;
-  }
+  // Max Price is owned per product in Digiflazz and is never recalculated by seller switching.
   return updated;
 }
 async function switchSeller(env, sku, sellerId, reason, preparedSelection = null) {
@@ -941,7 +931,7 @@ async function switchSeller(env, sku, sellerId, reason, preparedSelection = null
   try {
     // Set before the network call: a lost response may still mean Digiflazz saved the change.
     sent=true;
-    await remoteSave(env,changedProduct(current,choice,!config.autoFillMaxPrice,config.maxPriceOffset,false));
+    await remoteSave(env,changedProduct(current,choice));
     const verified=await freshProduct(env,sku);
     if (String(verified.seller_sku_id)!==sellerId) throw Error("Respons simpan diterima, tetapi seller baru belum terkonfirmasi.");
     const normalizedVerified=normalizeProduct(verified);
@@ -1194,7 +1184,7 @@ async function api(req, env, url) {
         const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:d.options.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config,new Date(),{ranked:d.options,current,best});
         const cached={...d.product,operation_status:op?.status,current_rating:current?.rating??null,current_sla:current?.sla??null,option_count:d.options.length,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:best?.seller_name||null,best_candidate_price:best?.price??null,best_candidate_rating:best?.rating??null,best_candidate_sla:best?.sla_days??null};
         await persistAttentionRows(env,[cached]);
-        return {ok:true,product:{...cached,raw:undefined,current_seller_sku_id:currentId},operation:op,options:d.options.map(({raw,...option})=>option),connectorReady,maxPricePolicy:{autoFill:!!d.config.autoFillMaxPrice,offset:Number(d.config.maxPriceOffset)||0}};
+        return {ok:true,product:{...cached,raw:undefined,current_seller_sku_id:currentId},operation:op,options:d.options.map(({raw,...option})=>option),connectorReady};
       };
       try { return reply(await shape(await rankedOptions(env,sku),true)); }
       catch(error) { await log(env,"WARN","seller-options",error.message,sku); }
