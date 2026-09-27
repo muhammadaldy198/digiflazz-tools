@@ -113,7 +113,7 @@ test("auto-switch priority is rating 4-5, then SLA, then cheapest price", () => 
     { seller_id:"h0-cheapest", seller_name:"H0 Cheapest", price:10000, rating:4.0, review_count:"100", stock:10, unlimited_stock:0, connection:"unknown", sla:"Max penyelesaian komplain H+0, max penerimaan komplain H+7", description:"", seller_status:1 }
   ];
   const config = { minRating:0, minReviews:0, priceCap:0, weights:{price:0,connection:100,sla:0,stock:0} };
-  const result = rank(product, rows, [{seller_name:"H0 Expensive",mode:"preferred"}], null, config, null);
+  const result = rank(product, rows, [], null, config, null);
   assert.equal(result.find(x=>x.seller_id==="bad-rating").eligible,false);
   assert.equal(result[0].seller_id,"h0-cheapest");
   assert.equal(result[0].sla_days,0);
@@ -563,7 +563,7 @@ test("browser helper config is authenticated and mirrors production seller polic
   assert.match(source,/minRating:cfg\.minRating/);
   assert.match(source,/minReviews:cfg\.minReviews/);
   assert.match(source,/priceTolerancePercent:cfg\.priceTolerancePercent/);
-  assert.match(source,/mode==="preferred"/);
+  assert.doesNotMatch(source,/mode==="preferred"/);
   assert.match(source,/mode==="blocked"/);
 });
 
@@ -615,4 +615,17 @@ test("product API exposes the same actionable Auto Switch filter",()=>{
   assert.match(source,/a\.best_candidate_seller IS NOT NULL/);
   assert.match(source,/autoSwitchCooldownCutoff\(cfg\)/);
   assert.match(source,/LEFT JOIN switch_operations op ON op\.sku=p\.sku/);
+});
+
+
+test("seller preference API supports only normal and blocked modes",()=>{
+  assert.match(source,/\["blocked","none"\]\.includes\(body\.mode\)/);
+  assert.doesNotMatch(source,/\["preferred","blocked","none"\]/);
+  assert.match(source,/p\.mode='blocked'/);
+});
+
+test("ranking has no hidden manual preferred-seller tie break",()=>{
+  const rankBlock=source.slice(source.indexOf("function rank("),source.indexOf("function parseNominalToken("));
+  assert.doesNotMatch(rankBlock,/mode==="preferred"|\.preferred/);
+  assert.match(rankBlock,/localeCompare\(str\(b\.seller_name\)/);
 });
