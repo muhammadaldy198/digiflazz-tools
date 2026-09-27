@@ -133,7 +133,7 @@
         '<div class="grid">'+
           metric("Koneksi",d.connection.connected?"Aktif":"Belum aktif",d.connection.lastTestStatus?"HTTP "+d.connection.lastTestStatus:"Sesi terenkripsi di D1")+
           metric("Produk",d.counts.products,"SKU hasil scan")+
-          metric("Perlu perhatian",issues,issues?("Operasional "+esc(d.counts.attentionBreakdown?.operasional||0)+" · Kualitas "+esc(d.counts.attentionBreakdown?.kualitas||0)+" · Harga "+esc(d.counts.attentionBreakdown?.harga||0)+" · Tertunda "+esc(d.counts.attentionBreakdown?.tertunda||0)):"Tidak ada yang terdeteksi","goto-issues")+
+          metric("Perlu perhatian",issues,issues?("Operasional "+(d.counts.attentionBreakdown?.operasional||0)+" · Kualitas "+(d.counts.attentionBreakdown?.kualitas||0)+" · Harga "+(d.counts.attentionBreakdown?.harga||0)+" · Tertunda "+(d.counts.attentionBreakdown?.tertunda||0)):"Tidak ada yang terdeteksi","goto-issues")+
           metric("Seller",d.counts.sellers,"Terdata di katalog")+
         '</div>'+
         '<section class="section grid two">'+
@@ -154,7 +154,7 @@
         '</section>'+
         '<section class="section card"><div class="section-head"><h2>Aktivitas terbaru</h2>'+button("Semua log","goto-logs","tiny")+'</div>'+feed(d.events)+'</section>';
     }
-    function metric(label,value,detail,action){return '<div class="card"><div class="metric-label">'+esc(label)+'</div><div class="metric">'+esc(value)+'</div><div class="sub">'+detail+'</div>'+(action?'<div class="controls" style="margin-top:12px">'+button("Lihat produk",action,"tiny")+'</div>':"")+'</div>'}
+    function metric(label,value,detail,action){return '<div class="card"><div class="metric-label">'+esc(label)+'</div><div class="metric">'+esc(value)+'</div><div class="sub">'+esc(detail)+'</div>'+(action?'<div class="controls" style="margin-top:12px">'+button("Lihat produk",action,"tiny")+'</div>':"")+'</div>'}
     function problem(p){return !!p.needs_attention}
     function attentionText(p){return Array.isArray(p.attention_reasons)&&p.attention_reasons.length?p.attention_reasons.join(" · "):""}
     async function products() {
