@@ -1200,12 +1200,16 @@ async function api(req, env, url) {
     if (method==="GET" && opt) {
       const sku=decodeURIComponent(opt[1]);
       const shape=async(d,connectorReady)=>{
-        const op=await env.DB.prepare("SELECT status,target_seller_id FROM switch_operations WHERE sku=?").bind(sku).first();
+        const op=await env.DB.prepare("SELECT status,target_seller_id,started_at FROM switch_operations WHERE sku=?").bind(sku).first();
         const raw=JSON.parse(d.product.raw),currentId=String(raw.seller_sku_id??"");
-        const current=d.options.find(x=>String(x.seller_id)===currentId)||null;
-        const best=d.options.find(x=>x.eligible)||null;
-        const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:d.options.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config,new Date(),{ranked:d.options,current,best});
-        const cached={...d.product,operation_status:op?.status,current_rating:current?.rating??null,current_sla:current?.sla??null,option_count:d.options.length,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:best?.seller_name||null,best_candidate_price:best?.price??null,best_candidate_rating:best?.rating??null,best_candidate_sla:best?.sla_days??null};
+        const rejectedAt=op?.status==="error"&&op?.started_at?Date.parse(String(op.started_at).replace(" ","T")+"Z"):0;
+        const rejectedId=rejectedAt&&Date.now()-rejectedAt<6*3600000?str(op?.target_seller_id):"";
+        const policyOptions=rejectedId?d.options.filter(x=>String(x.seller_id)!==rejectedId):d.options;
+        const current=policyOptions.find(x=>String(x.seller_id)===currentId)||null;
+        const best=policyOptions.find(x=>x.eligible)||null;
+        const replacement=policyOptions.find(x=>x.eligible&&String(x.seller_id)!==currentId)||null;
+        const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:policyOptions.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config,new Date(),{ranked:policyOptions,current,best});
+        const cached={...d.product,operation_status:op?.status,current_rating:current?.rating??null,current_sla:current?.sla??null,option_count:policyOptions.length,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:replacement?.seller_name||null,best_candidate_price:replacement?.price??null,best_candidate_rating:replacement?.rating??null,best_candidate_sla:replacement?.sla_days??null};
         await persistAttentionRows(env,[cached]);
         return {ok:true,product:{...cached,raw:undefined,current_seller_sku_id:currentId},operation:op,options:d.options.map(({raw,...option})=>option),connectorReady};
       };
