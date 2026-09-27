@@ -1,13 +1,16 @@
 // ==UserScript==
 // @name         Digi Tools — Auto Select Seller
 // @namespace    https://tools.lfamiliastore.my.id/
-// @version      1.9.0
+// @version      2.0.0
 // @description  Pilih seller langsung di halaman produk Digiflazz. Sesi tetap di browser.
 // @match        https://member.digiflazz.com/*
+// @match        https://tools.lfamiliastore.my.id/*
 // @run-at       document-end
 // @inject-into  content
 // @grant        GM_info
 // @grant        GM_registerMenuCommand
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @noframes
 // @downloadURL  https://raw.githubusercontent.com/muhammadaldy198/digiflazz-tools/main/extension/digi-select.user.js
 // @updateURL    https://raw.githubusercontent.com/muhammadaldy198/digiflazz-tools/main/extension/digi-select.user.js
@@ -17,9 +20,12 @@
   "use strict";
   const testing=typeof module!=="undefined" && !!module.exports;
   const KEY = "digiTools.autoSeller.v1";
-  const DEFAULTS = {enabled:true,saveMode:"manual",minRating:4,minReviews:0,priceTolerancePercent:2,autoServiceCode:true,preferred:"",blocked:""};
+  const SYNC_KEY = "digiTools.syncedSellerConfig.v1";
+  const BROWSER_DEFAULTS = {enabled:true,saveMode:"manual",autoServiceCode:true};
+  const RANK_DEFAULTS = {minRating:4,minReviews:0,priceTolerancePercent:2,preferred:[],blocked:[],syncedAt:null};
+  const DEFAULTS = {...BROWSER_DEFAULTS,...RANK_DEFAULTS};
   const str = value => String(value ?? "").trim();
-  const names = value => new Set(str(value).split(/[\n,]/).map(x=>x.trim().toLowerCase()).filter(Boolean));
+  const names = value => new Set((Array.isArray(value)?value:str(value).split(/[\n,]/)).map(x=>str(x).toLowerCase()).filter(Boolean));
   function reviewCount(value) {
     const raw=str(value);
     if (raw.startsWith("<")) return 0;
@@ -96,10 +102,41 @@
     })[0] || null;
   }
 
-  if (!testing && location.hostname !== "member.digiflazz.com") return;
-  function read() {
-    try {return {...DEFAULTS,...JSON.parse(localStorage.getItem(KEY)||"{}")}} catch {return {...DEFAULTS}}
+  function readSynced() {
+    try {
+      const value=typeof GM_getValue==="function"?GM_getValue(SYNC_KEY,null):null;
+      if(value&&typeof value==="object")return {...RANK_DEFAULTS,...value};
+    } catch {}
+    return {...RANK_DEFAULTS};
   }
+  function readBrowser() {
+    try {
+      const value=JSON.parse(localStorage.getItem(KEY)||"{}");
+      return {
+        enabled:value.enabled!==false,
+        saveMode:["manual","auto"].includes(value.saveMode)?value.saveMode:"manual",
+        autoServiceCode:value.autoServiceCode!==false
+      };
+    } catch { return {...BROWSER_DEFAULTS} }
+  }
+  function read() { return {...readBrowser(),...readSynced()} }
+  async function syncFromTools() {
+    try {
+      const res=await fetch("/api/browser-config",{credentials:"include",headers:{accept:"application/json"}});
+      if(!res.ok)return false;
+      const data=await res.json();
+      const config={...RANK_DEFAULTS,...(data.config||{}),syncedAt:data.generatedAt||new Date().toISOString()};
+      if(typeof GM_setValue==="function")await GM_setValue(SYNC_KEY,config);
+      return true;
+    } catch { return false }
+  }
+  if (!testing && location.hostname === "tools.lfamiliastore.my.id") {
+    syncFromTools();
+    setInterval(syncFromTools,15000);
+    window.addEventListener("focus",syncFromTools);
+    return;
+  }
+  if (!testing && location.hostname !== "member.digiflazz.com") return;
   let settings=testing?{...DEFAULTS}:read(),status=()=>{},lastProduct=null,lastSeller=null,lastActionTime=0;
   function update(message) {status(message)}
   function handle(vm,product) {
@@ -255,44 +292,42 @@
     const uiScale=Math.max(1,Math.min(3,1/viewportScale));
     host.style.cssText="all:initial!important;position:fixed!important;right:16px!important;top:90px!important;z-index:2147483647!important;display:block!important;visibility:visible!important;opacity:1!important;pointer-events:none!important;transform-origin:top right!important;transform:scale("+uiScale+")!important";
     const ui=host.attachShadow({mode:"open"});
+    const synced=settings.syncedAt?new Date(settings.syncedAt).toLocaleString("id-ID"):"belum pernah";
     ui.innerHTML=`<style>
-      *{box-sizing:border-box}button,input,select,textarea{font:inherit}button{cursor:pointer}
+      *{box-sizing:border-box}button,input,select{font:inherit}button{cursor:pointer}
       .bubble{display:block!important;pointer-events:auto!important;min-width:132px;min-height:46px;border:0;border-radius:26px;background:#087b96;color:white;padding:12px 16px;box-shadow:0 4px 20px #0008;font:700 14px system-ui;visibility:visible!important;opacity:1!important}
       .box{display:none;pointer-events:auto!important;width:min(310px,calc(100vw - 24px));max-height:min(78vh,670px);overflow:auto;border:1px solid #35667a;border-radius:13px;background:#102330;color:#eef6fa;padding:14px;box-shadow:0 8px 26px #0008;font:13px system-ui;margin-bottom:8px}
       .box.open{display:block}h3{margin:0 0 8px;font-size:16px}p{margin:5px 0 12px;color:#b9d3dc;line-height:1.4}
-      label{display:block;margin:10px 0 4px}input:not([type=checkbox]),textarea,select{width:100%;background:#071925;border:1px solid #426579;border-radius:7px;color:white;padding:8px}
-      input[type=checkbox]{margin-right:6px} .row{display:flex;align-items:center;gap:8px}.row>label{flex:1}
-      textarea{height:43px;resize:vertical} .status{padding:8px;border-radius:7px;background:#234254;color:#d6eff5;margin-top:10px}
+      label{display:block;margin:10px 0 4px}select{width:100%;background:#071925;border:1px solid #426579;border-radius:7px;color:white;padding:8px}
+      input[type=checkbox]{margin-right:6px}.row{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid #234254}.row strong{text-align:right}
+      .status{padding:8px;border-radius:7px;background:#234254;color:#d6eff5;margin-top:10px}
     </style><div class="box" id="box"><h3>Auto Seller Digiflazz</h3>
-      <p>Prioritas: <strong>rating minimal 4 → SLA tercepat → toleransi harga → rating/review terbaik</strong>. Jenis koneksi tidak dipakai.</p>
-      <label><input id="enabled" type="checkbox"> Aktifkan pemilihan</label>
+      <p>Aturan seller disinkron dari <strong>tools.lfamiliastore.my.id</strong>. Tidak ada lagi setelan rating/toleransi/blokir terpisah di browser.</p>
+      <div class="row"><span>Rating minimum</span><strong>${settings.minRating}</strong></div>
+      <div class="row"><span>Ulasan minimum</span><strong>${settings.minReviews}</strong></div>
+      <div class="row"><span>Toleransi harga</span><strong>${settings.priceTolerancePercent}%</strong></div>
+      <div class="row"><span>Prioritas / blokir</span><strong>${names(settings.preferred).size} / ${names(settings.blocked).size}</strong></div>
+      <div class="row"><span>Sinkron terakhir</span><strong>${synced}</strong></div>
+      <label><input id="enabled" type="checkbox"> Aktifkan pemilihan seller di halaman Digiflazz</label>
       <label for="mode">Simpan perubahan produk</label><select id="mode"><option value="manual">Manual: tekan Simpan di Digiflazz</option><option value="auto">Otomatis setelah seller dipilih</option></select>
-      <div class="row"><label for="rating">Rating minimal<input id="rating" type="number" min="4" max="5" step="0.1"></label><label for="reviews">Ulasan minimal<input id="reviews" type="number" min="0"></label></div>
-      <label for="tolerance">Toleransi harga (%)</label><input id="tolerance" type="number" min="0" max="20" step="0.1">
-      <p>Seller dalam toleransi dari harga termurah dibandingkan lagi berdasarkan rating, ulasan, lalu harga.</p>
-      <p>Max Price tidak diubah oleh skrip. <strong>Satu-satunya batas harga adalah Max Price produk di Digiflazz.</strong></p>
-      <label><input id="code" type="checkbox"> Buat SKU otomatis untuk semua produk</label>
-      <p><strong>Tidak perlu isi SKU satu-satu.</strong> Saat form produk muncul dan nama game + nominal terbaca, kode langsung dibuat: Mobile Legends 5 Diamond → ML5, Free Fire 1000 Diamond → FF1000.</p>
+      <p>Max Price tidak diubah. Batas harga absolut tetap Max Price produk Digiflazz.</p>
+      <label><input id="code" type="checkbox"> Isi SKU otomatis</label>
+      <p>Mobile Legends 5 Diamond → ML5, Free Fire 1000 Diamond → FF1000. SKU manual tidak ditimpa.</p>
       <button id="fill-all-codes" type="button">⚡ Isi semua SKU di halaman</button>
-      <label for="preferred">Seller prioritas (pisah koma)</label><textarea id="preferred"></textarea>
-      <label for="blocked">Seller diblokir (pisah koma)</label><textarea id="blocked"></textarea>
-      <div id="status" class="status" role="status">Auto Seller v1.9 aktif. Tombol Digiflazz tidak diubah; pilih seller tetap bisa ditekan.</div>
-    </div><button class="bubble" id="toggle" aria-label="Buka pengaturan auto seller">⚡ Auto Seller</button>`;
+      <div id="status" class="status" role="status">Auto Seller v2.0 aktif. Aturan production dipakai untuk ranking.</div>
+    </div><button class="bubble" id="toggle" aria-label="Buka Auto Seller">⚡ Auto Seller</button>`;
     const get=id=>ui.getElementById(id);
     get("enabled").checked=settings.enabled;
     get("mode").value=settings.saveMode;
-    get("rating").value=settings.minRating;
-    get("reviews").value=settings.minReviews;
-    get("tolerance").value=settings.priceTolerancePercent;
     get("code").checked=settings.autoServiceCode;
-    get("preferred").value=settings.preferred;
-    get("blocked").value=settings.blocked;
     status=message=>{get("status").textContent=message};
     get("toggle").onclick=()=>get("box").classList.toggle("open");
     get("fill-all-codes").onclick=()=>fillAllCodes(true);
     ui.addEventListener("change",()=>{
-      settings={enabled:get("enabled").checked,saveMode:get("mode").value,minRating:Math.min(5,Math.max(4,Number(get("rating").value)||4)),minReviews:Math.max(0,Number(get("reviews").value)||0),priceTolerancePercent:Math.min(20,Math.max(0,Number(get("tolerance").value)||0)),autoServiceCode:get("code").checked,preferred:get("preferred").value,blocked:get("blocked").value};
-      localStorage.setItem(KEY,JSON.stringify(settings));update("Pengaturan tersimpan di browser ini.");
+      const browser={enabled:get("enabled").checked,saveMode:get("mode").value,autoServiceCode:get("code").checked};
+      settings={...settings,...browser};
+      localStorage.setItem(KEY,JSON.stringify(browser));
+      update("Pengaturan browser tersimpan. Aturan seller tetap mengikuti dashboard.");
     });
     (document.documentElement||document.body).append(host);
     host.__openDigiTools=()=>get("box").classList.add("open");
