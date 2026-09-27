@@ -1073,17 +1073,14 @@ async function api(req, env, url) {
     if (method!=="GET" && method!=="HEAD" && req.headers.get("origin")!==url.origin) return failure("Asal permintaan tidak sah.",403);
     if (method==="GET" && path==="/api/bootstrap") {
       const cfg=await settings(env);
-      const [c, attention, sellerCount, last, events, verified]=await Promise.all([
-        conn(env),loadAttentionRows(env,cfg),
+      const [c, counts, sellerCount, last, events, verified]=await Promise.all([
+        conn(env),attentionSummary(env),
         env.DB.prepare("SELECT count(*) total FROM sellers").first(),
         env.DB.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").first(),
         env.DB.prepare("SELECT id,level,kind,sku,message,created_at FROM events ORDER BY id DESC LIMIT 8").all(),
         env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first()
       ]);
-      const issues=attention.filter(x=>x.needs_attention).length;
-      const activeProducts=attention.filter(x=>Number(x.active)===1).length;
-      const qualityKnown=attention.filter(x=>Number(x.active)===1&&Number(x.option_count)>0).length;
-      return reply({ok:true,connection:{connected:!!c,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at},settings:cfg,counts:{products:attention.length,issues,sellers:sellerCount.total,attentionBreakdown:attentionBreakdown(attention),activeProducts,qualityKnown},lastScan:last,events:events.results,liveSwitchAvailable:!!verified});
+      return reply({ok:true,connection:{connected:!!c,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at},settings:cfg,counts:{...counts,sellers:Number(sellerCount?.total)||0},lastScan:last,events:events.results,liveSwitchAvailable:!!verified});
     }
     if (method==="GET" && path==="/api/connection/status") {
       const c=await conn(env);
@@ -1120,7 +1117,8 @@ async function api(req, env, url) {
       return reply({ok:true,routes:rows.results});
     }
     if (method==="GET" && path==="/api/products") {
-      const page=bounded(url.searchParams.get("page"),1,100000,1);
+      const page=Math.trunc(bounded(url.searchParams.get("page"),1,100000,1));
+      const offset=(page-1)*50;
       const q="%"+str(url.searchParams.get("q")).slice(0,80)+"%";
       const status=str(url.searchParams.get("status"));
       const category=str(url.searchParams.get("category")).slice(0,120);
@@ -1129,22 +1127,35 @@ async function api(req, env, url) {
       const args=[q,q,q,q];
       if(category){where+=" AND p.category=?";args.push(category)}
       if(brand){where+=" AND p.brand=?";args.push(brand)}
-      const cfg=await settings(env);
+      if(status==="issues")where+=" AND a.dirty=0 AND a.needs_attention=1";
+      else if(status==="locked")where+=" AND l.buyer_sku_code IS NOT NULL";
+      else if(status==="active")where+=" AND p.active=1";
+      else if(status==="inactive")where+=" AND p.active=0";
+      const from=` FROM products p
+        LEFT JOIN product_attention a ON a.sku=p.sku
+        LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku `;
       const brandSql=category?"SELECT DISTINCT brand FROM products WHERE category=? AND brand<>'' ORDER BY brand COLLATE NOCASE":"SELECT DISTINCT brand FROM products WHERE brand<>'' ORDER BY brand COLLATE NOCASE";
-      const [allRows,categories,brands]=await Promise.all([
-        loadAttentionRows(env,cfg,where,args),
+      const [count,rows,categories,brands]=await Promise.all([
+        env.DB.prepare("SELECT count(*) total"+from+where).bind(...args).first(),
+        env.DB.prepare(`SELECT p.sku,p.product_id,p.name,p.category,p.brand,p.product_type,p.seller_name,p.price,p.max_price,p.active,p.seller_active,p.stock,p.unlimited_stock,p.last_seen,p.nominal_value,
+          l.buyer_sku_code IS NOT NULL AS locked,
+          COALESCE(a.needs_attention,0) AS needs_attention,COALESCE(a.dirty,1) AS attention_dirty,
+          a.reasons_json,a.current_rating,a.current_sla,a.best_candidate_seller,a.best_candidate_price,a.best_candidate_rating,a.best_candidate_sla,
+          a.option_count,a.operation_status
+          `+from+where+`
+          ORDER BY p.brand COLLATE NOCASE ASC,
+            CASE WHEN p.nominal_value IS NULL THEN 1 ELSE 0 END ASC,
+            p.nominal_value ASC,p.name COLLATE NOCASE ASC,p.sku COLLATE NOCASE ASC
+          LIMIT 50 OFFSET ?`).bind(...args,offset).all(),
         env.DB.prepare("SELECT DISTINCT category FROM products WHERE category<>'' ORDER BY category COLLATE NOCASE").all(),
         category?env.DB.prepare(brandSql).bind(category).all():env.DB.prepare(brandSql).all()
       ]);
-      let filtered=allRows;
-      if(status==="issues")filtered=filtered.filter(x=>x.needs_attention);
-      else if(status==="locked")filtered=filtered.filter(x=>x.locked);
-      else if(status==="active")filtered=filtered.filter(x=>Number(x.active)===1);
-      else if(status==="inactive")filtered=filtered.filter(x=>Number(x.active)!==1);
-      filtered=[...filtered].sort(productSortCompare);
-      const total=filtered.length;
-      const products=filtered.slice((page-1)*50,page*50);
-      return reply({ok:true,total,page,products,categories:categories.results.map(x=>x.category),brands:brands.results.map(x=>x.brand)});
+      const products=rows.results.map(row=>{
+        let attention_reasons=[];
+        try { attention_reasons=JSON.parse(row.reasons_json||"[]"); } catch {}
+        return {...row,attention_reasons,needs_attention:Boolean(row.needs_attention),attention_dirty:Boolean(row.attention_dirty),locked:Boolean(row.locked)};
+      });
+      return reply({ok:true,total:Number(count?.total)||0,page,products,categories:categories.results.map(x=>x.category),brands:brands.results.map(x=>x.brand)});
     }
     const opt=path.match(/^\/api\/products\/([^/]+)\/options$/);
     if (method==="GET" && opt) {
