@@ -6,7 +6,7 @@ import { runInNewContext } from "node:vm";
 const source=readFileSync(new URL("../extension/digi-select.user.js",import.meta.url),"utf8");
 const module={exports:{}};
 runInNewContext(source,{module,setTimeout});
-const {chooseSeller,patch,serviceCode,maxPriceForSeller,slaDays}=module.exports;
+const {chooseSeller,patch,serviceCode,maxPriceForSeller,slaDays,reviewValue}=module.exports;
 const product={id:123,seller_sku_id:"current",max_price:12000};
 const candidate=(id,seller,price,rating=4.8,review="40+",sla="H+0",connectionType="ip")=>({id,seller,price,reviewAvg:rating,rating_qty:review,stock:10,unlimited_stock:0,status_sellerSku:1,connectionType,seller_details:{sla}});
 
@@ -87,7 +87,7 @@ test("observes Digiflazz seller dialog without replacing its native button handl
 test("Firefox Android userscript uses forced content-context injection and visible panel",()=>{
   assert.match(source,/\/\/ @inject-into\s+content/);
   assert.match(source,/\/\/ @run-at\s+document-end/);
-  assert.match(source,/Auto Seller v1\.5 aktif/);
+  assert.match(source,/Auto Seller v1\.7 aktif/);
   assert.match(source,/wrappedJSObject/);
 });
 
@@ -121,4 +121,26 @@ test("userscript chooses cheapest when every eligible SLA is unknown",()=>{
     candidate("u1","Unknown 1",8000,4.1,"100+","maks penerimaan komplain H+7","api")
   ];
   assert.equal(chooseSeller(options,product,{minRating:4}).id,"u1");
+});
+
+
+test("userscript applies the same 2 percent price tolerance ranking",()=>{
+  const options=[
+    candidate("h0","H0",1432,4.75,"10+","H+0","ip"),
+    candidate("ga","GA",1437,5,"10+","H+0","api"),
+    candidate("ne","NE",1445,5,"<10","H+0","h2h"),
+    candidate("outside","Outside",1465,5,"5000+","H+0","ip")
+  ];
+  assert.equal(chooseSeller(options,product,{minRating:4,priceTolerancePercent:2}).id,"ga");
+});
+
+test("userscript review tie-break understands approximate counts",()=>{
+  assert.equal(reviewValue("10+"),10);
+  assert.equal(reviewValue("<10"),9);
+  assert.equal(reviewValue("30+"),30);
+});
+
+test("userscript panel exposes configurable price tolerance",()=>{
+  assert.match(source,/id="tolerance"/);
+  assert.match(source,/priceTolerancePercent:2/);
 });
