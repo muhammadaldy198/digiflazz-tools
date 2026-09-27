@@ -1178,7 +1178,9 @@ async function api(req, env, url) {
         const current=d.options.find(x=>String(x.seller_id)===currentId)||null;
         const best=d.options.find(x=>x.eligible)||null;
         const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:d.options.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config,new Date(),{ranked:d.options,current,best});
-        return {ok:true,product:{...d.product,raw:undefined,current_seller_sku_id:currentId,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:best?.seller_name||null,best_candidate_price:best?.price??null,best_candidate_rating:best?.rating??null,best_candidate_sla:best?.sla_days??null},operation:op,options:d.options.map(({raw,...option})=>option),connectorReady};
+        const cached={...d.product,operation_status:op?.status,current_rating:current?.rating??null,current_sla:current?.sla??null,option_count:d.options.length,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:best?.seller_name||null,best_candidate_price:best?.price??null,best_candidate_rating:best?.rating??null,best_candidate_sla:best?.sla_days??null};
+        await persistAttentionRows(env,[cached]);
+        return {ok:true,product:{...cached,raw:undefined,current_seller_sku_id:currentId},operation:op,options:d.options.map(({raw,...option})=>option),connectorReady};
       };
       try { return reply(await shape(await rankedOptions(env,sku),true)); }
       catch(error) { await log(env,"WARN","seller-options",error.message,sku); }
