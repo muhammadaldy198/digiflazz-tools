@@ -266,3 +266,15 @@ test("overview product filter and auto-switch share the unified attention source
   assert.match(source,/const attention=await loadAttentionRows\(env,cfg,"WHERE p\.active=1"\)/);
   assert.match(source,/if\(status==="issues"\)filtered=filtered\.filter\(x=>x\.needs_attention\)/);
 });
+
+
+test("soft SLA attention cannot force a worse seller switch",()=>{
+  assert.match(source,/const hardIssue=target\.attention_reasons\.some/);
+  assert.match(source,/Seller saat ini masih kandidat terbaik; tidak dipindahkan/);
+  assert.match(source,/const best=top&&String\(top\.seller_id\)!==currentId/);
+});
+
+test("attention option coverage uses one grouped count instead of a per-product correlated scan",()=>{
+  assert.match(source,/LEFT JOIN \(SELECT sku,count\(\*\) AS option_count FROM seller_options GROUP BY sku\) option_counts/);
+  assert.doesNotMatch(source,/SELECT count\(\*\) FROM seller_options all_options WHERE all_options\.sku=p\.sku/);
+});
