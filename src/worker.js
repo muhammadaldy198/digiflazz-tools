@@ -449,10 +449,41 @@ function parseNominalToken(value) {
   const n=Number(normalized);
   return Number.isFinite(n)?n:Infinity;
 }
+function escapeRegex(value) {
+  return str(value).replace(/[.*+?^$()|[\]\\]/g,"\\$&");
+}
 function productNominalValue(product) {
   let title=str(product?.name),brand=str(product?.brand);
-  if(brand) {
-    const clean=brand.replace(/[.*+?^$()|[\]\\]/g,"\\function attentionReasons(product, config, now=new Date(), context=null) {
+  if(brand) title=title.replace(new RegExp("^\\s*"+escapeRegex(brand)+"\\s*","i"),"");
+  const match=title.match(/\d+(?:[.,]\d+)*/);
+  if(match)return parseNominalToken(match[0]);
+  const skuMatch=str(product?.sku).match(/\d+(?:[.,]\d+)*/);
+  return skuMatch?parseNominalToken(skuMatch[0]):Infinity;
+}
+function productSortCompare(a,b) {
+  const familyA=str(a.brand||a.category||a.name).toLocaleUpperCase("id-ID");
+  const familyB=str(b.brand||b.category||b.name).toLocaleUpperCase("id-ID");
+  const family=familyA.localeCompare(familyB,"id-ID",{sensitivity:"base",numeric:true});
+  if(family)return family;
+  const nominalA=productNominalValue(a),nominalB=productNominalValue(b);
+  if(nominalA!==nominalB)return nominalA-nominalB;
+  const type=str(a.product_type).localeCompare(str(b.product_type),"id-ID",{sensitivity:"base",numeric:true});
+  if(type)return type;
+  return str(a.name).localeCompare(str(b.name),"id-ID",{sensitivity:"base",numeric:true})||str(a.sku).localeCompare(str(b.sku),"id-ID",{numeric:true});
+}
+function matchingRuleForProduct(product,rules) {
+  const priority={product:0,type:1,brand:2,category:3,global:4};
+  return (rules||[]).filter(rule=>{
+    if(!Number(rule.is_active))return false;
+    if(rule.scope_type==="global")return true;
+    if(rule.scope_type==="product")return str(rule.scope_value)===str(product.sku);
+    if(rule.scope_type==="type")return str(rule.scope_value)===str(product.product_type);
+    if(rule.scope_type==="brand")return str(rule.scope_value)===str(product.brand);
+    if(rule.scope_type==="category")return str(rule.scope_value)===str(product.category);
+    return false;
+  }).sort((a,b)=>(priority[a.scope_type]??9)-(priority[b.scope_type]??9)||Number(b.id||0)-Number(a.id||0))[0]||null;
+}
+function attentionReasons(product, config, now=new Date(), context=null) {
   const reasons=[];
   const operation=str(product.operation_status);
   if(operation==="pending")reasons.push("Operasi masih pending");
