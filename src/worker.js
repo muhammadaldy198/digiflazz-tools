@@ -144,12 +144,36 @@ async function remoteSave(env, body) {
   const session = await unseal(row, env.SESSION_ENCRYPTION_KEY);
   const headers = { ...session.headers, accept:"application/json", "content-type":"application/json", origin:"https://member.digiflazz.com", referer:"https://member.digiflazz.com/buyer-area" };
   delete headers.host;
-  // A save is never retried: an ambiguous response must be inspected first.
+  // A save is never retried blindly: ambiguous responses must be inspected first.
   const res = await fetch("https://member.digiflazz.com/api/v1/buyer/product", { method:"POST", headers, body:JSON.stringify(body), redirect:"manual", signal:AbortSignal.timeout(20000) });
-  if (!res.ok) throw Error("Digiflazz menolak perubahan produk (HTTP " + res.status + ").");
-  if (!res.headers.get("content-type")?.includes("json")) throw Error("Respons perubahan produk bukan JSON; periksa produk di Digiflazz.");
+  const contentType=res.headers.get("content-type")||"";
+  if (!res.ok) {
+    let detail="";
+    try {
+      if(contentType.includes("json")) {
+        const data=await res.json();
+        detail=str(data?.message ?? data?.error?.message ?? data?.error ?? data?.detail);
+      } else {
+        detail=str(await res.text()).replace(/<[^>]+>/g," ").replace(/\s+/g," ").slice(0,160);
+      }
+    } catch {}
+    const error=Error("Digiflazz menolak perubahan produk (HTTP "+res.status+")"+(detail?": "+detail.slice(0,160):"."));
+    error.status=res.status;
+    error.definitive=res.status>=400&&res.status<500&&![408,409,423,425,429].includes(res.status);
+    throw error;
+  }
+  if (!contentType.includes("json")) {
+    const error=Error("Respons perubahan produk bukan JSON; periksa produk di Digiflazz.");
+    error.definitive=false;
+    throw error;
+  }
   const data = await res.json();
-  if (data.status === false || data.success === false || data.error) throw Error("Digiflazz tidak menerima perubahan produk.");
+  if (data.status === false || data.success === false || data.error) {
+    const detail=str(data?.message ?? data?.error?.message ?? data?.error);
+    const error=Error("Digiflazz tidak menerima perubahan produk"+(detail?": "+detail.slice(0,160):"."));
+    error.definitive=true;
+    throw error;
+  }
   return data;
 }
 function listOf(obj, keys) {
@@ -949,12 +973,12 @@ async function switchSeller(env, sku, sellerId, reason, preparedSelection = null
     await log(env,"INFO","switch","Seller dipindahkan dan dikonfirmasi di Digiflazz: "+candidate.seller_name,sku);
     return {ok:true,sku,seller:candidate.seller_name,price:candidate.price,verified:true};
   } catch(error) {
-    const status=sent?"unknown":"error";
+    const status=error?.definitive===true?"error":sent?"unknown":"error";
     await env.DB.batch([
       env.DB.prepare("UPDATE switch_history SET status=? WHERE id=?").bind(status,record.meta.last_row_id),
       env.DB.prepare("UPDATE switch_operations SET status=? WHERE sku=?").bind(status,sku)
     ]);
-    await log(env,"ERROR","switch",error.message+" Tidak diulang otomatis.",sku);
+    await log(env,"ERROR","switch",error.message+(status==="error"?" Target ditandai gagal; Auto Switch tidak mengulang seller ini sementara.":" Hasil belum pasti; tidak diulang otomatis."),sku);
     throw error;
   }
 }
@@ -986,14 +1010,17 @@ async function autoSwitchBatch(env, requestedLimit) {
     try {
       const selection=await rankedOptions(env,sku);
       const current=JSON.parse(selection.product.raw),currentId=String(current.seller_sku_id??"");
-      const top=selection.options.find(o=>o.eligible);
+      const rejected=await env.DB.prepare("SELECT target_seller_id FROM switch_operations WHERE sku=? AND status='error' AND started_at > datetime('now','-6 hours')").bind(sku).first();
+      const rejectedId=str(rejected?.target_seller_id);
+      const eligibleOptions=selection.options.filter(o=>o.eligible&&(!rejectedId||String(o.seller_id)!==rejectedId));
+      const top=eligibleOptions[0]||null;
       const hardIssue=target.attention_reasons.some(reason=>[
         "Seller belum dipilih","Seller OFF","Harga di atas max price","Stok habis","Sedang cut-off"
       ].includes(reason));
       const best=top&&String(top.seller_id)!==currentId
         ? top
         : hardIssue
-          ? selection.options.find(o=>o.eligible&&String(o.seller_id)!==currentId)
+          ? eligibleOptions.find(o=>String(o.seller_id)!==currentId)
           : null;
       if(!best) {
         noCandidate++;
@@ -1041,9 +1068,10 @@ async function updateMaxPrice(env,sku,amount) {
     await log(env,"INFO","max-price","Harga maksimum tersimpan: Rp"+amount,sku);
     return {ok:true,maxPrice:amount,verified:true};
   } catch(error) {
-    await env.DB.prepare("UPDATE switch_operations SET status='unknown' WHERE sku=?").bind(sku).run();
+    const status=error?.definitive===true?"error":"unknown";
+    await env.DB.prepare("UPDATE switch_operations SET status=? WHERE sku=?").bind(status,sku).run();
     await markAttentionDirty(env,[sku]);
-    await log(env,"ERROR","max-price",error.message+" Tidak diulang otomatis.",sku);
+    await log(env,"ERROR","max-price",error.message+(status==="error"?" Penolakan terkonfirmasi.":" Hasil belum pasti; tidak diulang otomatis."),sku);
     throw error;
   }
 }
