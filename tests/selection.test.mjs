@@ -382,8 +382,9 @@ test("auto-switch reads only fresh cached attention targets",()=>{
 });
 
 test("rule preference zone and settings changes invalidate materialized attention",()=>{
-  assert.ok((source.match(/await markAttentionDirty\(env\);/g)||[]).length>=5);
-  assert.match(source,/await markAttentionDirty\(env,\[str\(b\.sku\)\]\)/);
+  assert.ok((source.match(/await markAttentionDirty\(env\);/g)||[]).length>=3);
+  assert.match(source,/await markAttentionDirty\(env,\[sku\]\)/);
+  assert.match(source,/await markAttentionDirty\(env,assigned\.results\.map\(x=>x\.sku\)\)/);
 });
 
 test("product mutations dirty or remove the corresponding attention cache",()=>{
