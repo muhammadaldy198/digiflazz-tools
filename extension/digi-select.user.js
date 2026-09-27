@@ -289,7 +289,7 @@
       <button id="fill-all-codes" type="button">⚡ Isi semua SKU di halaman</button>
       <label for="preferred">Seller prioritas (pisah koma)</label><textarea id="preferred"></textarea>
       <label for="blocked">Seller diblokir (pisah koma)</label><textarea id="blocked"></textarea>
-      <div id="status" class="status" role="status">Auto Seller v1.5 aktif. Tombol Digiflazz tidak diubah; pilih seller tetap bisa ditekan.</div>
+      <div id="status" class="status" role="status">Auto Seller v1.7 aktif. Tombol Digiflazz tidak diubah; pilih seller tetap bisa ditekan.</div>
     </div><button class="bubble" id="toggle" aria-label="Buka pengaturan auto seller">⚡ Auto Seller</button>`;
     const get=id=>ui.getElementById(id);
     get("enabled").checked=settings.enabled;
