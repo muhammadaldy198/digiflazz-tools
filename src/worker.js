@@ -396,8 +396,8 @@ function rank(product, rows, prefs, rule, config, zone) {
     if (!x.price || (x.seller_status != null && Number(x.seller_status) !== 1)) reasons.push("Seller tidak aktif");
     if (x.price > max) reasons.push("Harga di atas batas");
     if (minRating > 0 && (x.rating == null || Number(x.rating) < minRating)) reasons.push("Rating kurang atau tidak tersedia");
-    const reviews=reviewValue(x.review_count);
-    if (config.minReviews > 0 && reviews < config.minReviews) reasons.push("Ulasan kurang atau tidak tersedia");
+    const reviews=reviewValue(x.review_count),reviewText=str(x.review_count);
+    if (config.minReviews > 0 && (reviewText.startsWith("<") || reviews < config.minReviews)) reasons.push("Ulasan kurang atau tidak tersedia");
     if (rule?.require_stock !== 0 && x.stock != null && !x.unlimited_stock && !(x.stock > 0)) reasons.push("Stok habis");
     if (rule?.avoid_cutoff !== 0 && inCutoffWindow(x.start_cut_off,x.end_cut_off)) reasons.push("Sedang cut-off");
     if (zone && !zone.patterns.every(p=>String(x.description||"").toLowerCase().includes(p.toLowerCase()))) reasons.push("Zona tidak cocok");
