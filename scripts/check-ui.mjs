@@ -11,6 +11,15 @@ for (const forbidden of ["Batas kandidat seller global", "Batas kandidat seller 
 for (const phrase of ["Max Price per produk Digiflazz adalah satu-satunya batas harga seller", "Target diambil langsung dari katalog", "Pasangkan produk ke zona", "Cooldown perpindahan (jam)", "SKU per batch Auto Switch", "Auto Seller Browser", "Uji & simpan sesi", "Putuskan sesi", "Siap Auto Switch"]) {
   if (!html.includes(phrase)) throw Error("Missing UI clarification: " + phrase);
 }
+
+const productsBlock = html.slice(html.indexOf("async function products()"), html.indexOf("async function product("));
+if (productsBlock.includes('data-action="toggle-product"') || productsBlock.includes('data-action="delete-product"')) {
+  throw Error("Product list must keep destructive Digiflazz actions inside Kelola modal");
+}
+if (!productsBlock.includes('data-action="product"')) throw Error("Product list must expose Kelola action");
+if (!html.includes("Kandidat pengganti")) throw Error("Replacement candidate badge missing");
+if (html.includes("Pilihan Auto Switch")) throw Error("Stale Auto Switch badge wording must not be shown");
+
 const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 if (!script) throw Error("Inline dashboard script missing");
 const dir = mkdtempSync(join(tmpdir(), "digiflazz-ui-"));
