@@ -429,8 +429,8 @@ function rank(product, rows, prefs, rule, config, zone) {
     if (minRating > 0 && (x.rating == null || Number(x.rating) < minRating)) reasons.push("Rating kurang atau tidak tersedia");
     const reviews=reviewValue(x.review_count),reviewText=str(x.review_count);
     if (config.minReviews > 0 && (reviewText.startsWith("<") || reviews < config.minReviews)) reasons.push("Ulasan kurang atau tidak tersedia");
-    if (rule?.require_stock !== 0 && x.stock != null && !x.unlimited_stock && !(x.stock > 0)) reasons.push("Stok habis");
-    if (rule?.avoid_cutoff !== 0 && inCutoffWindow(x.start_cut_off,x.end_cut_off)) reasons.push("Sedang cut-off");
+    if (x.stock != null && !x.unlimited_stock && !(x.stock > 0)) reasons.push("Stok habis");
+    if (inCutoffWindow(x.start_cut_off,x.end_cut_off)) reasons.push("Sedang cut-off");
     if (zone && !zone.patterns.every(p=>String(x.description||"").toLowerCase().includes(p.toLowerCase()))) reasons.push("Zona tidak cocok");
     const sla_days=slaDays(x.sla);
     return { ...x, eligible:!reasons.length, reasons, sla_days, review_value:reviews };
@@ -501,10 +501,9 @@ function productSortCompare(a,b) {
   return str(a.name).localeCompare(str(b.name),"id-ID",{sensitivity:"base",numeric:true})||str(a.sku).localeCompare(str(b.sku),"id-ID",{numeric:true});
 }
 function matchingRuleForProduct(product,rules) {
-  const priority={product:0,type:1,brand:2,category:3,global:4};
+  const priority={product:0,type:1,brand:2,category:3};
   return (rules||[]).filter(rule=>{
     if(!Number(rule.is_active))return false;
-    if(rule.scope_type==="global")return true;
     if(rule.scope_type==="product")return str(rule.scope_value)===str(product.sku);
     if(rule.scope_type==="type")return str(rule.scope_value)===str(product.product_type);
     if(rule.scope_type==="brand")return str(rule.scope_value)===str(product.brand);
@@ -1101,7 +1100,6 @@ async function reconcile(env,sku) {
   return {ok:true,confirmed,status};
 }
 async function canonicalRuleTarget(env, scopeType, value) {
-  if(scopeType==="global") return "";
   const raw=str(value);
   if(!raw) throw Error("Target aturan wajib dipilih.");
   const columns={category:"category",brand:"brand",type:"product_type",product:"sku"};
@@ -1286,7 +1284,7 @@ async function api(req, env, url) {
     }
     if(method==="GET"&&path==="/api/rules") {
       const [rows,categories,brands,types,products]=await Promise.all([
-        env.DB.prepare("SELECT id,scope_type,scope_value,min_rating,require_stock,avoid_cutoff,is_active,created_at FROM seller_rules ORDER BY id DESC").all(),
+        env.DB.prepare("SELECT id,scope_type,scope_value,min_rating,is_active,created_at FROM seller_rules WHERE scope_type IN ('category','brand','type','product') ORDER BY id DESC").all(),
         env.DB.prepare("SELECT DISTINCT category value FROM products WHERE category<>'' ORDER BY category COLLATE NOCASE").all(),
         env.DB.prepare("SELECT DISTINCT brand value FROM products WHERE brand<>'' ORDER BY brand COLLATE NOCASE").all(),
         env.DB.prepare("SELECT DISTINCT product_type value FROM products WHERE product_type<>'' ORDER BY product_type COLLATE NOCASE").all(),
@@ -1305,7 +1303,7 @@ async function api(req, env, url) {
     }
     if(method==="POST"&&path==="/api/rules") {
       const b=await getJson(req),scope=str(b.scope_type);
-      if(!["global","category","brand","type","product"].includes(scope))throw Error("Cakupan tidak valid.");
+      if(!["category","brand","type","product"].includes(scope))throw Error("Cakupan tidak valid.");
       const target=await canonicalRuleTarget(env,scope,b.scope_value);
       const rating=b.min_rating==null||b.min_rating===""?null:Number(b.min_rating);
       if(rating!=null&&(!Number.isFinite(rating)||rating<4||rating>5))throw Error("Rating minimal harus antara 4.0 dan 5.0.");
@@ -1314,11 +1312,11 @@ async function api(req, env, url) {
       if(existing?.id) {
         id=Number(existing.id);
         await env.DB.batch([
-          env.DB.prepare("UPDATE seller_rules SET scope_value=?,min_rating=?,max_price=NULL,require_stock=?,avoid_cutoff=?,is_active=1 WHERE id=?").bind(target,rating,bool(b.require_stock)?1:0,bool(b.avoid_cutoff)?1:0,id),
+          env.DB.prepare("UPDATE seller_rules SET scope_value=?,min_rating=?,max_price=NULL,require_stock=1,avoid_cutoff=1,is_active=1 WHERE id=?").bind(target,rating,id),
           env.DB.prepare("DELETE FROM seller_rules WHERE scope_type=? AND scope_value=? COLLATE NOCASE AND id<>?").bind(scope,target,id)
         ]);
       } else {
-        const r=await env.DB.prepare("INSERT INTO seller_rules(scope_type,scope_value,min_rating,max_price,require_stock,avoid_cutoff) VALUES(?,?,?,NULL,?,?)").bind(scope,target,rating,bool(b.require_stock)?1:0,bool(b.avoid_cutoff)?1:0).run();
+        const r=await env.DB.prepare("INSERT INTO seller_rules(scope_type,scope_value,min_rating,max_price,require_stock,avoid_cutoff) VALUES(?,?,?,NULL,1,1)").bind(scope,target,rating).run();
         id=Number(r.meta.last_row_id);
       }
       await markAttentionDirty(env);
