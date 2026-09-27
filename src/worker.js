@@ -416,7 +416,6 @@ function reviewValue(value) {
 }
 function rank(product, rows, prefs, rule, config, zone) {
   const blocked = new Set(prefs.filter(p=>p.mode==="blocked").map(p=>p.seller_name.toLowerCase()));
-  const preferred = new Set(prefs.filter(p=>p.mode==="preferred").map(p=>p.seller_name.toLowerCase()));
   const max = Number(product.max_price)>0 ? Number(product.max_price) : Infinity;
   const configuredMinRating=Number(rule?.min_rating ?? config.minRating ?? 4);
   const minRating=Math.max(4,Math.min(5,Number.isFinite(configuredMinRating)?configuredMinRating:4));
@@ -434,7 +433,7 @@ function rank(product, rows, prefs, rule, config, zone) {
     if (rule?.avoid_cutoff !== 0 && inCutoffWindow(x.start_cut_off,x.end_cut_off)) reasons.push("Sedang cut-off");
     if (zone && !zone.patterns.every(p=>String(x.description||"").toLowerCase().includes(p.toLowerCase()))) reasons.push("Zona tidak cocok");
     const sla_days=slaDays(x.sla);
-    return { ...x, eligible:!reasons.length, reasons, sla_days, review_value:reviews, preferred:preferred.has(name) };
+    return { ...x, eligible:!reasons.length, reasons, sla_days, review_value:reviews };
   });
   const cheapestBySla=new Map();
   for(const x of mapped) if(x.eligible) {
@@ -459,13 +458,13 @@ function rank(product, rows, prefs, rule, config, zone) {
         return Number(b.rating||0)-Number(a.rating||0) ||
           Number(b.review_value||0)-Number(a.review_value||0) ||
           Number(a.price)-Number(b.price) ||
-          Number(b.preferred)-Number(a.preferred);
+          str(a.seller_name).localeCompare(str(b.seller_name),"id-ID",{sensitivity:"base",numeric:true});
       }
     }
     return Number(a.price)-Number(b.price) ||
       Number(b.rating||0)-Number(a.rating||0) ||
       Number(b.review_value||0)-Number(a.review_value||0) ||
-      Number(b.preferred)-Number(a.preferred);
+      str(a.seller_name).localeCompare(str(b.seller_name),"id-ID",{sensitivity:"base",numeric:true});
   });
 }
 function parseNominalToken(value) {
@@ -1273,13 +1272,13 @@ async function api(req, env, url) {
     const pending=path.match(/^\/api\/products\/([^/]+)\/reconcile$/);
     if(method==="POST"&&pending)return reply(await reconcile(env,decodeURIComponent(pending[1])));
     if(method==="GET"&&path==="/api/sellers") {
-      const rows=await env.DB.prepare("SELECT s.seller_id,s.name,s.rating,s.review_count,s.product_count,s.invoice,p.mode FROM sellers s LEFT JOIN seller_preferences p ON p.seller_name=s.name ORDER BY s.rating DESC,s.name LIMIT 1000").all();
+      const rows=await env.DB.prepare("SELECT s.seller_id,s.name,s.rating,s.review_count,s.product_count,s.invoice,p.mode FROM sellers s LEFT JOIN seller_preferences p ON p.seller_name=s.name AND p.mode='blocked' ORDER BY s.rating DESC,s.name LIMIT 1000").all();
       return reply({ok:true,sellers:rows.results});
     }
     const pref=path.match(/^\/api\/sellers\/([^/]+)\/preference$/);
     if(method==="POST"&&pref) {
       const body=await getJson(req), name=decodeURIComponent(pref[1]);
-      if(!["preferred","blocked","none"].includes(body.mode))throw Error("Pilihan tidak valid.");
+      if(!["blocked","none"].includes(body.mode))throw Error("Pilihan tidak valid.");
       await env.DB.prepare("DELETE FROM seller_preferences WHERE seller_name=?").bind(name).run();
       if(body.mode!=="none") await env.DB.prepare("INSERT INTO seller_preferences(seller_name,mode) VALUES(?,?)").bind(name,body.mode).run();
       await markAttentionDirty(env);
@@ -1416,7 +1415,6 @@ async function api(req, env, url) {
           minRating:cfg.minRating,
           minReviews:cfg.minReviews,
           priceTolerancePercent:cfg.priceTolerancePercent,
-          preferred:prefs.results.filter(x=>x.mode==="preferred").map(x=>x.seller_name),
           blocked:prefs.results.filter(x=>x.mode==="blocked").map(x=>x.seller_name)
         }
       });
