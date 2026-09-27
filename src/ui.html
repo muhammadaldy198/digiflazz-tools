@@ -99,7 +99,7 @@
     const rupiah=n=>"Rp"+Number(n||0).toLocaleString("id-ID");
     const fmt=s=>s?new Date(String(s).replace(" ","T")+"Z").toLocaleString("id-ID",{dateStyle:"short",timeStyle:"short"}):"—";
     const state={view:"overview",bootstrap:null,page:1,q:"",status:"all",category:"",brand:"",selected:null,toastTimer:null,ruleTargets:null,historySku:"",historyStatus:"",historyReason:"",logLevel:"",logKind:"",logSku:"",logQ:""};
-    const names={overview:["Ringkasan","Pantau katalog dan seller Digiflazz."],products:["Produk","Daftar SKU buyer dan status seller."],sellers:["Penjual","Blokir seller yang tidak boleh dipilih Auto Switch."],rules:["Aturan","Kriteria pemilihan seller untuk kategori, brand, dan produk."],zones:["Grup produk","Pisahkan supplier dengan aturan zona."],history:["Perubahan","Riwayat scan, harga, dan perpindahan seller."],logs:["Log sistem","Aktivitas terbaru dari pemindaian dan koneksi."],tools:["Auto Seller Browser","Pendamping browser Digiflazz yang mengikuti aturan seller dari dashboard."],settings:["Pengaturan","Atur pemindaian, penilaian, dan penyimpanan."],connection:["Koneksi","Periksa sesi Digiflazz yang sudah tersimpan."]};
+    const names={overview:["Ringkasan","Pantau katalog dan seller Digiflazz."],products:["Produk","Daftar SKU buyer dan status seller."],sellers:["Penjual","Blokir seller yang tidak boleh dipilih Auto Switch."],rules:["Aturan","Pengecualian rating minimum untuk kategori, brand, tipe, atau SKU."],zones:["Grup produk","Pisahkan supplier dengan aturan zona."],history:["Perubahan","Riwayat scan, harga, dan perpindahan seller."],logs:["Log sistem","Aktivitas terbaru dari pemindaian dan koneksi."],tools:["Auto Seller Browser","Pendamping browser Digiflazz yang mengikuti aturan seller dari dashboard."],settings:["Pengaturan","Atur pemindaian, penilaian, dan penyimpanan."],connection:["Koneksi","Periksa sesi Digiflazz yang sudah tersimpan."]};
     async function api(path,options={}) {
       const res=await fetch(path,{...options,headers:{"content-type":"application/json",...(options.headers||{})}});
       const data=await res.json().catch(()=>({}));
@@ -205,11 +205,6 @@
     function syncRuleTarget(scope) {
       const el=$("rule-target");
       if(!el)return;
-      if(scope==="global") {
-        el.disabled=true;
-        el.innerHTML='<option value="">Semua produk</option>';
-        return;
-      }
       el.disabled=false;
       const label=scope==="category"?"kategori":scope==="brand"?"brand":scope==="type"?"tipe":"SKU";
       el.innerHTML='<option value="">Pilih '+label+'</option>'+ruleTargetRows(scope).map(x=>'<option value="'+esc(x.value)+'">'+esc(x.label||x.value)+'</option>').join("");
@@ -217,9 +212,9 @@
     async function rules() {
       const d=await api("/api/rules");
       state.ruleTargets=d.targets||{};
-      $("content").innerHTML='<div class="grid two"><section class="card"><h2>Buat / perbarui aturan</h2><form id="rule-form"><div class="fields two"><div class="field"><label for="rule-scope">Berlaku untuk</label><select id="rule-scope" name="scope_type"><option value="global">Semua produk</option><option value="category">Kategori</option><option value="brand">Brand</option><option value="type">Tipe</option><option value="product">Satu SKU</option></select></div><div class="field"><label for="rule-target">Target</label><select id="rule-target" name="scope_value" disabled><option value="">Semua produk</option></select><span class="hint">Target diambil langsung dari katalog agar kategori/brand tidak tertukar.</span></div><div class="field"><label for="rule-rating">Rating minimal</label><input id="rule-rating" name="min_rating" type="number" min="4" max="5" step=".1" placeholder="Ikut pengaturan global"></div></div><div class="controls"><label class="check"><input type="checkbox" name="require_stock" checked> Wajib stok</label><label class="check"><input type="checkbox" name="avoid_cutoff" checked> Hindari cut-off</label></div><p class="hint">Batas harga tidak diatur di sini. <strong>Max Price per produk Digiflazz adalah satu-satunya batas harga seller.</strong> Menyimpan scope + target yang sama akan memperbarui aturan lama, bukan membuat duplikat.</p><div style="margin-top:16px"><button class="button primary">Simpan aturan</button></div></form></section>'+
-      '<section class="card"><h2>Aturan tersimpan</h2>'+(d.rules.length?d.rules.map(r=>'<div class="row"><div><span class="name">'+esc(r.scope_type==="global"?"Semua produk":r.scope_value)+'</span><span class="sku">'+esc(r.scope_type)+' · Rating '+(r.min_rating!=null?"≥ "+esc(r.min_rating):"ikut global")+' · '+(Number(r.require_stock)?"stok wajib":"stok opsional")+' · '+(Number(r.avoid_cutoff)?"hindari cut-off":"cut-off diizinkan")+'</span></div><button class="button tiny danger" data-action="delete-rule" data-id="'+esc(r.id)+'">Hapus</button></div>').join(""):'<div class="empty">Belum ada aturan khusus. Pengaturan global tetap berlaku.</div>')+'</section></div>';
-      syncRuleTarget("global");
+      $("content").innerHTML='<div class="grid two"><section class="card"><h2>Aturan rating khusus</h2><form id="rule-form"><div class="fields two"><div class="field"><label for="rule-scope">Berlaku untuk</label><select id="rule-scope" name="scope_type"><option value="category">Kategori</option><option value="brand">Brand</option><option value="type">Tipe</option><option value="product">Satu SKU</option></select></div><div class="field"><label for="rule-target">Target</label><select id="rule-target" name="scope_value" required></select><span class="hint">Target diambil langsung dari katalog agar kategori/brand tidak tertukar.</span></div><div class="field"><label for="rule-rating">Rating minimal</label><input id="rule-rating" name="min_rating" type="number" min="4" max="5" step=".1" placeholder="Ikut pengaturan global"></div></div><p class="hint">Aturan ini hanya menaikkan/menentukan rating minimum untuk target tertentu. <strong>Stok tersedia dan tidak sedang cut-off selalu wajib</strong> dan tidak dapat dimatikan. Batas harga tetap Max Price per produk Digiflazz.</p><div style="margin-top:16px"><button class="button primary">Simpan aturan</button></div></form></section>'+
+      '<section class="card"><h2>Aturan tersimpan</h2>'+(d.rules.length?d.rules.map(r=>'<div class="row"><div><span class="name">'+esc(r.scope_value)+'</span><span class="sku">'+esc(r.scope_type)+' · Rating '+(r.min_rating!=null?"≥ "+esc(r.min_rating):"ikut global")+' · stok wajib · hindari cut-off</span></div><button class="button tiny danger" data-action="delete-rule" data-id="'+esc(r.id)+'">Hapus</button></div>').join(""):'<div class="empty">Belum ada aturan khusus. Pengaturan global tetap berlaku.</div>')+'</section></div>';
+      syncRuleTarget("category");
     }
     async function zones() {
       const d=await api("/api/zones");
@@ -396,7 +391,7 @@
       if(!["rule-form","zone-form","assign-form","settings-form","connection-form"].includes(e.target.id))return;
       e.preventDefault();const f=e.target,b=new FormData(f),id=f.id;
       try{
-        if(id==="rule-form")await write("/api/rules",{scope_type:b.get("scope_type"),scope_value:b.get("scope_value"),min_rating:b.get("min_rating")===""?null:Number(b.get("min_rating")),require_stock:b.has("require_stock"),avoid_cutoff:b.has("avoid_cutoff")});
+        if(id==="rule-form")await write("/api/rules",{scope_type:b.get("scope_type"),scope_value:b.get("scope_value"),min_rating:b.get("min_rating")===""?null:Number(b.get("min_rating"))});
         if(id==="zone-form")await write("/api/zones",Object.fromEntries(b));
         if(id==="assign-form")await write("/api/zones/assign",Object.fromEntries(b));
         if(id==="connection-form"){const d=await write("/api/connection",{curl:b.get("curl")});$("curl").value="";toast("Sesi diuji dan disimpan: HTTP "+d.httpStatus+".")}
