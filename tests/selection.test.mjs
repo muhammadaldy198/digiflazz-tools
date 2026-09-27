@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8").replace("const HTML = __HTML__;", "const HTML = '';");
-const { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays, validBuyerSku } = await import("data:text/javascript," + encodeURIComponent(source));
+const { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons } = await import("data:text/javascript," + encodeURIComponent(source));
 
 test("seller filtering rejects blocked, expensive, and out of stock candidates", () => {
   const product = { max_price: 11000 };
@@ -191,4 +191,78 @@ test("product control routes expose SKU status and delete actions",()=>{
   assert.ok(source.includes("const statusEdit=path.match"));
   assert.ok(source.includes("const productDelete=path.match"));
   assert.match(source,/method==="DELETE"&&productDelete/);
+});
+
+
+test("2 percent price tolerance prefers better rating and reviews over a tiny price difference",()=>{
+  const product={max_price:0};
+  const rows=[
+    {seller_id:"h0",seller_name:"H0",price:1432,rating:4.75,review_count:"10+",stock:10,unlimited_stock:0,sla:"H+0",seller_status:1},
+    {seller_id:"ga",seller_name:"GA",price:1437,rating:5,review_count:"10+",stock:10,unlimited_stock:0,sla:"H+0",seller_status:1},
+    {seller_id:"ne",seller_name:"NE",price:1445,rating:5,review_count:"<10",stock:10,unlimited_stock:0,sla:"H+0",seller_status:1},
+    {seller_id:"outside",seller_name:"Outside",price:1465,rating:5,review_count:"5000+",stock:10,unlimited_stock:0,sla:"H+0",seller_status:1}
+  ];
+  const result=rank(product,rows,[],null,{minRating:4,minReviews:0,priceCap:0,priceTolerancePercent:2},null);
+  assert.equal(result[0].seller_id,"ga");
+  assert.equal(result[0].within_price_tolerance,true);
+  assert.equal(result[0].reference_price,1432);
+  assert.equal(result.find(x=>x.seller_id==="outside").within_price_tolerance,false);
+});
+
+test("SLA remains higher priority than the 2 percent price band",()=>{
+  const product={max_price:0};
+  const rows=[
+    {seller_id:"h1-perfect",seller_name:"H1 Perfect",price:9000,rating:5,review_count:"5000+",stock:10,unlimited_stock:0,sla:"H+1",seller_status:1},
+    {seller_id:"h0-good",seller_name:"H0 Good",price:10000,rating:4.1,review_count:"10+",stock:10,unlimited_stock:0,sla:"H+0",seller_status:1}
+  ];
+  const result=rank(product,rows,[],null,{minRating:4,minReviews:0,priceCap:0,priceTolerancePercent:2},null);
+  assert.equal(result[0].seller_id,"h0-good");
+});
+
+test("review tie-break interprets approximate counts without bypassing eligibility safety",()=>{
+  assert.equal(reviewValue("30+"),30);
+  assert.equal(reviewValue("10+"),10);
+  assert.equal(reviewValue("<10"),9);
+  assert.equal(reviewValue(""),0);
+  const rows=[
+    {seller_id:"few",seller_name:"Few",price:10000,rating:5,review_count:"<10",stock:10,unlimited_stock:0,sla:"H+0",seller_status:1},
+    {seller_id:"enough",seller_name:"Enough",price:10010,rating:5,review_count:"20+",stock:10,unlimited_stock:0,sla:"H+0",seller_status:1}
+  ];
+  const result=rank({max_price:0},rows,[],null,{minRating:4,minReviews:10,priceCap:0,priceTolerancePercent:2},null);
+  assert.equal(result.find(x=>x.seller_id==="few").eligible,false);
+  assert.equal(result[0].seller_id,"enough");
+});
+
+test("price tolerance setting validates and defaults to configurable 2 percent",()=>{
+  const current={priceTolerancePercent:2};
+  assert.equal(validateSettings({priceTolerancePercent:2},current).priceTolerancePercent,2);
+  assert.equal(validateSettings({priceTolerancePercent:50},current).priceTolerancePercent,20);
+  assert.match(source,/priceTolerancePercent:\s*2/);
+});
+
+test("attention reasons cover operational quality price cutoff and unresolved operations",()=>{
+  const row={
+    active:1,seller_name:"Current",seller_active:0,price:12000,max_price:11000,stock:0,unlimited_stock:0,
+    start_cut_off:"23:00",end_cut_off:"23:59",option_count:1,current_option_seller_id:"x",
+    current_rating:3.9,current_sla:"SLA H+1",operation_status:"unknown"
+  };
+  const reasons=attentionReasons(row,{minRating:4},new Date("2026-09-27T16:30:00Z"));
+  assert.ok(reasons.includes("Seller OFF"));
+  assert.ok(reasons.includes("Harga di atas max price"));
+  assert.ok(reasons.includes("Stok habis"));
+  assert.ok(reasons.includes("Sedang cut-off"));
+  assert.ok(reasons.includes("Rating < 4"));
+  assert.ok(reasons.includes("SLA H+1"));
+  assert.ok(reasons.includes("Hasil operasi belum pasti"));
+});
+
+test("inactive products are not treated as operational attention unless an operation is unresolved",()=>{
+  assert.deepEqual(attentionReasons({active:0,operation_status:null},{minRating:4}),[]);
+  assert.deepEqual(attentionReasons({active:0,operation_status:"pending"},{minRating:4}),["Operasi masih pending"]);
+});
+
+test("overview product filter and auto-switch share the unified attention source",()=>{
+  assert.match(source,/async function loadAttentionRows/);
+  assert.match(source,/const attention=await loadAttentionRows\(env,cfg,"WHERE p\.active=1"\)/);
+  assert.match(source,/if\(status==="issues"\)filtered=filtered\.filter\(x=>x\.needs_attention\)/);
 });
