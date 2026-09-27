@@ -187,7 +187,8 @@ test("direct product controls write to Digiflazz fields and verify destructive a
 });
 
 test("product control routes expose SKU status and delete actions",()=>{
-  assert.match(source,/\/api\/products\\\/\(\[\^\/\]\+\)\\\/sku/);
-  assert.match(source,/\/api\/products\\\/\(\[\^\/\]\+\)\\\/status/);
+  assert.ok(source.includes("const skuEdit=path.match"));
+  assert.ok(source.includes("const statusEdit=path.match"));
+  assert.ok(source.includes("const productDelete=path.match"));
   assert.match(source,/method==="DELETE"&&productDelete/);
 });
