@@ -280,8 +280,8 @@ async function scan(env, reason = "manual") {
     const products = items.map(x=>normalizeProduct(x.member,{...metadata,categoryName:x.categoryName})).filter(Boolean);
     if (items.length && !products.length) throw Error("Data produk tidak memiliki SKU yang dikenali.");
     let issues = 0;
-    for (let i=0;i<products.length;i+=100) {
-      const chunk = products.slice(i,i+100);
+    for (let i=0;i<products.length;i+=75) {
+      const chunk = products.slice(i,i+75);
       const old = await env.DB.prepare("SELECT sku,price,max_price,seller_name,seller_active,active,stock,unlimited_stock,raw FROM products WHERE sku IN (" + chunk.map(()=>"?").join(",") + ")").bind(...chunk.map(x=>x.sku)).all();
       const before = new Map(old.results.map(x=>[x.sku,x]));
       const queries = [],chunkDirty=[];
@@ -318,8 +318,8 @@ async function scan(env, reason = "manual") {
     }
     const stale=await env.DB.prepare("SELECT sku FROM products WHERE last_seen < (SELECT started_at FROM scan_runs WHERE id=?)").bind(runId).all();
     if(stale.results.length) {
-      for(let i=0;i<stale.results.length;i+=80) {
-        const skus=stale.results.slice(i,i+80).map(x=>x.sku);
+      for(let i=0;i<stale.results.length;i+=75) {
+        const skus=stale.results.slice(i,i+75).map(x=>x.sku);
         const marks=skus.map(()=>"?").join(",");
         await env.DB.batch([
           env.DB.prepare("DELETE FROM seller_options WHERE sku IN ("+marks+")").bind(...skus),
