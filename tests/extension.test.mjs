@@ -34,7 +34,7 @@ test("seller priority is rating 4-5, then SLA, then cheapest price",()=>{
     candidate("h0-expensive","H0 Expensive",11000,4.2,"100+","SLA H+0, maks komplain H+7","api"),
     candidate("h0-cheap","H0 Cheap",10000,4.0,"100+","Max penyelesaian komplain H+0, max penerimaan komplain H+7","unknown")
   ];
-  assert.equal(chooseSeller(options,product,{minRating:0,preferred:"H0 Expensive"}).id,"h0-cheap");
+  assert.equal(chooseSeller(options,product,{minRating:0}).id,"h0-cheap");
 });
 
 test("connection type never outranks SLA or price",()=>{
@@ -161,16 +161,23 @@ test("userscript uses only per-product Max Price as seller price ceiling",()=>{
 });
 
 
-test("synced blocked and preferred seller lists accept arrays from backend",()=>{
+test("synced blocked seller list accepts arrays from backend",()=>{
   const options=[
-    candidate("blocked","Blocked Seller",9000,5,"100+","H+0"),
-    candidate("preferred","Preferred Seller",9000,5,"100+","H+0"),
+    candidate("blocked","Blocked Seller",8900,5,"100+","H+0"),
+    candidate("alpha","Alpha Seller",9000,5,"100+","H+0"),
     candidate("other","Other Seller",9000,5,"100+","H+0")
   ];
-  assert.equal(chooseSeller(options,product,{blocked:["Blocked Seller"],preferred:["Preferred Seller"]}).id,"preferred");
+  assert.equal(chooseSeller(options,product,{blocked:["Blocked Seller"]}).id,"alpha");
 });
 
 test("old local ranking controls are no longer persisted by browser settings",()=>{
   assert.match(source,/const browser=\{enabled:get\("enabled"\)\.checked,saveMode:get\("mode"\)\.value,autoServiceCode:get\("code"\)\.checked\}/);
   assert.match(source,/Aturan seller tetap mengikuti dashboard/);
+});
+
+
+test("userscript has no preferred-seller ranking control or synced field",()=>{
+  assert.doesNotMatch(source,/preferred:/);
+  assert.doesNotMatch(source,/settings\.preferred/);
+  assert.doesNotMatch(source,/cfg\.preferred/);
 });
