@@ -1350,14 +1350,36 @@ async function api(req, env, url) {
       return reply({ok:true});
     }
     if(method==="GET"&&path==="/api/events") {
-      const rows=await env.DB.prepare("SELECT id,level,kind,sku,message,created_at FROM events ORDER BY id DESC LIMIT 200").all();
-      return reply({ok:true,events:rows.results});
+      const level=str(url.searchParams.get("level")).toUpperCase();
+      const kind=str(url.searchParams.get("kind")).slice(0,80);
+      const sku=str(url.searchParams.get("sku")).slice(0,80);
+      const q=str(url.searchParams.get("q")).slice(0,120);
+      let where="WHERE 1=1",args=[];
+      if(level&&["INFO","WARN","ERROR"].includes(level)){where+=" AND level=?";args.push(level)}
+      if(kind){where+=" AND kind=?";args.push(kind)}
+      if(sku){where+=" AND sku LIKE ?";args.push("%"+sku+"%")}
+      if(q){where+=" AND message LIKE ?";args.push("%"+q+"%")}
+      const [rows,kinds]=await Promise.all([
+        env.DB.prepare("SELECT id,level,kind,sku,message,created_at FROM events "+where+" ORDER BY id DESC LIMIT 200").bind(...args).all(),
+        env.DB.prepare("SELECT DISTINCT kind FROM events WHERE kind<>'' ORDER BY kind COLLATE NOCASE").all()
+      ]);
+      return reply({ok:true,events:rows.results,kinds:kinds.results.map(x=>x.kind)});
     }
     if(method==="GET"&&path==="/api/history") {
+      const sku=str(url.searchParams.get("sku")).slice(0,80);
+      const status=str(url.searchParams.get("status")).toLowerCase();
+      const reason=str(url.searchParams.get("reason")).toLowerCase();
+      let priceWhere="",priceArgs=[],switchWhere="WHERE 1=1",switchArgs=[];
+      if(sku){
+        priceWhere="WHERE buyer_sku_code LIKE ?";priceArgs.push("%"+sku+"%");
+        switchWhere+=" AND buyer_sku_code LIKE ?";switchArgs.push("%"+sku+"%");
+      }
+      if(status&&["pending","unknown","success","error"].includes(status)){switchWhere+=" AND status=?";switchArgs.push(status)}
+      if(reason&&["manual","auto"].includes(reason)){switchWhere+=" AND reason=?";switchArgs.push(reason)}
       const [prices,switches,runs]=await Promise.all([
-        env.DB.prepare("SELECT buyer_sku_code,seller_name,price,captured_at FROM price_history ORDER BY id DESC LIMIT 100").all(),
-        env.DB.prepare("SELECT buyer_sku_code,from_seller,to_seller,reason,status,created_at FROM switch_history ORDER BY id DESC LIMIT 100").all(),
-        env.DB.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 50").all()
+        env.DB.prepare("SELECT buyer_sku_code,seller_name,price,captured_at FROM price_history "+priceWhere+" ORDER BY id DESC LIMIT 100").bind(...priceArgs).all(),
+        env.DB.prepare("SELECT buyer_sku_code,from_seller,to_seller,reason,status,created_at FROM switch_history "+switchWhere+" ORDER BY id DESC LIMIT 100").bind(...switchArgs).all(),
+        env.DB.prepare("SELECT id,status,total,issues,message,started_at,finished_at FROM scan_runs ORDER BY id DESC LIMIT 50").all()
       ]);
       return reply({ok:true,prices:prices.results,switches:switches.results,runs:runs.results});
     }
