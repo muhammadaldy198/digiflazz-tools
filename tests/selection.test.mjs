@@ -129,3 +129,29 @@ test("SLA parser prefers resolution SLA and ignores complaint acceptance horizon
   assert.equal(slaDays("Max penyelesaian komplain H+1, Max terima komplen H+7"),1);
   assert.equal(slaDays("SLA H+2, maks penerimaan komplain H+7"),2);
 });
+
+
+test("unknown SLA is a last-resort fallback after any known SLA",()=>{
+  const product={max_price:0};
+  const rows=[
+    {seller_id:"unknown-cheap",seller_name:"Unknown Cheap",price:7000,rating:5,review_count:"100",stock:10,unlimited_stock:0,sla:"",seller_status:1},
+    {seller_id:"known-h2",seller_name:"Known H2",price:9000,rating:4.2,review_count:"100",stock:10,unlimited_stock:0,sla:"SLA H+2, maks komplain H+7",seller_status:1}
+  ];
+  const config={minRating:4,minReviews:0,priceCap:0,weights:{price:40,connection:30,sla:20,stock:10}};
+  const result=rank(product,rows,[],null,config,null);
+  assert.equal(result[0].seller_id,"known-h2");
+  assert.equal(result[0].sla_days,2);
+  assert.equal(result[1].sla_days,999);
+});
+
+test("when all eligible sellers have unknown SLA, choose the cheapest",()=>{
+  const product={max_price:0};
+  const rows=[
+    {seller_id:"u2",seller_name:"Unknown 2",price:9000,rating:4.5,review_count:"100",stock:10,unlimited_stock:0,sla:"maks penerimaan komplain H+7",seller_status:1},
+    {seller_id:"u1",seller_name:"Unknown 1",price:8000,rating:4.1,review_count:"100",stock:10,unlimited_stock:0,sla:"",seller_status:1}
+  ];
+  const config={minRating:4,minReviews:0,priceCap:0,weights:{price:40,connection:30,sla:20,stock:10}};
+  const result=rank(product,rows,[],null,config,null);
+  assert.equal(result[0].seller_id,"u1");
+  assert.equal(result[0].sla_days,999);
+});
