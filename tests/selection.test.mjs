@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8").replace("const HTML = __HTML__;", "const HTML = '';");
-const { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct } = await import("data:text/javascript," + encodeURIComponent(source));
+const { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct } = await import("data:text/javascript," + encodeURIComponent(source));
 
 test("seller filtering rejects blocked, expensive, and out of stock candidates", () => {
   const product = { max_price: 11000 };
@@ -59,14 +59,6 @@ test("switch saves exact Digiflazz seller fields and preserves unrelated product
   assert.equal(result.multi,false);
   assert.equal(current.seller_sku_id,"old");
 });
-
-test("service codes are deterministic and use game initials",()=>{
-  assert.equal(serviceCode("Mobile Legends","5 Diamond"),"ML5");
-  assert.equal(serviceCode("Free Fire","1000DIAMOND"),"FF1000");
-  assert.equal(serviceCode("","Free Fire 1000DIAMOND"),"FF1000");
-  assert.equal(serviceCode("Mobile Legends","Weekly Pass"),null);
-});
-
 
 test("per-product Max Price remains authoritative even when current seller is unhealthy",()=>{
   const product={seller_name:"Old",seller_active:0,price:10000,max_price:10100,stock:1,unlimited_stock:0};
@@ -552,4 +544,35 @@ test("settings validation exposes real batch and cooldown controls",()=>{
 test("scheduled worker no longer runs the redundant price-only proactive monitor",()=>{
   assert.doesNotMatch(source,/if\(cfg\.proactiveScan\)/);
   assert.doesNotMatch(source,/better_seller_available/);
+});
+
+
+test("connection replacement is validated before encrypted session overwrite",()=>{
+  const connectionBlock=source.slice(source.indexOf('if (method==="POST" && path==="/api/connection")'),source.indexOf('if (method==="POST" && path==="/api/connection/test")'));
+  assert.match(connectionBlock,/await fetch\(target/);
+  assert.match(connectionBlock,/cURL tidak disimpan karena sesi Digiflazz gagal diuji/);
+  assert.match(connectionBlock,/last_test_status,last_test_at/);
+  assert.ok(connectionBlock.indexOf("await fetch(target") < connectionBlock.indexOf("await seal(data"));
+});
+
+test("browser helper config is authenticated and mirrors production seller policy",()=>{
+  assert.match(source,/path==="\/api\/browser-config"/);
+  assert.match(source,/minRating:cfg\.minRating/);
+  assert.match(source,/minReviews:cfg\.minReviews/);
+  assert.match(source,/priceTolerancePercent:cfg\.priceTolerancePercent/);
+  assert.match(source,/mode==="preferred"/);
+  assert.match(source,/mode==="blocked"/);
+});
+
+test("manual API discovery and one-off service-code API are removed",()=>{
+  assert.doesNotMatch(source,/path==="\/api\/discover"/);
+  assert.doesNotMatch(source,/\/api\/service-code/);
+  assert.doesNotMatch(source,/async function discover\(/);
+  assert.doesNotMatch(source,/function serviceCode\(/);
+  assert.doesNotMatch(source,/api_discovery/);
+});
+
+test("disconnecting a Digiflazz session is explicit and logged",()=>{
+  assert.match(source,/method==="DELETE" && path==="\/api\/connection"/);
+  assert.match(source,/Sesi Digiflazz diputus dari tools/);
 });
