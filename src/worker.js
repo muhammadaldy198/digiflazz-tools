@@ -5,9 +5,8 @@ const decoder = new TextDecoder();
 const DEFAULTS = {
   scanEnabled: false, dryRun: true, autoSwitch: false, scanIntervalMinutes: 5,
   minRating: 4, minReviews: 0,
-  saveMode: "manual", proactiveScan: false,
-  reoptimizeHours: 0, minSavingsPercent: 5, cooldownHours: 24, autoSwitchBatchSize: 5, attentionRefreshBatchSize: 5,
-  weights: { price: 40, connection: 30, sla: 20, stock: 10 },
+  saveMode: "manual",
+  cooldownHours: 24, autoSwitchBatchSize: 5, attentionRefreshBatchSize: 5,
   priceTolerancePercent: 2
 };
 const secureHeaders = {
@@ -259,16 +258,14 @@ function validateSettings(input, current) {
   const next = { ...current };
   for (const [key, value] of Object.entries(input)) {
     if (!(key in DEFAULTS)) continue;
-    if (["scanEnabled","dryRun","autoSwitch","proactiveScan"].includes(key)) next[key] = bool(value);
-    else if (["minRating","minReviews","scanIntervalMinutes","reoptimizeHours","minSavingsPercent","cooldownHours","autoSwitchBatchSize","attentionRefreshBatchSize","priceTolerancePercent"].includes(key)) {
-      const limits = {minRating:[4,5],minReviews:[0,100000],scanIntervalMinutes:[5,1440],reoptimizeHours:[0,720],minSavingsPercent:[0,100],cooldownHours:[1,720],autoSwitchBatchSize:[1,10],attentionRefreshBatchSize:[1,10],priceTolerancePercent:[0,20]};
+    if (["scanEnabled","dryRun","autoSwitch"].includes(key)) next[key] = bool(value);
+    else if (["minRating","minReviews","scanIntervalMinutes","cooldownHours","autoSwitchBatchSize","attentionRefreshBatchSize","priceTolerancePercent"].includes(key)) {
+      const limits = {
+        minRating:[4,5],minReviews:[0,100000],scanIntervalMinutes:[5,1440],
+        cooldownHours:[1,720],autoSwitchBatchSize:[1,10],attentionRefreshBatchSize:[1,10],priceTolerancePercent:[0,20]
+      };
       next[key] = bounded(value, ...limits[key], current[key]);
     } else if (key === "saveMode" && ["manual","auto"].includes(value)) next[key] = value;
-    else if (key === "weights") {
-      const w = Object.fromEntries(["price","connection","sla","stock"].map(k => [k, bounded(value?.[k],0,100,0)]));
-      if (Object.values(w).reduce((a,b)=>a+b,0) !== 100) throw Error("Total bobot harus 100%.");
-      next.weights = w;
-    }
   }
   return next;
 }
@@ -1470,21 +1467,6 @@ export default {
         return;
       }
 
-      if(cfg.proactiveScan) {
-        const sample=await env.DB.prepare("SELECT p.sku FROM products p LEFT JOIN seller_options o ON o.sku=p.sku WHERE p.active=1 AND p.seller_active=1 AND p.price>0 AND (p.stock>0 OR p.unlimited_stock=1) GROUP BY p.sku ORDER BY min(COALESCE(o.last_seen,'1970-01-01')) ASC LIMIT 1").all();
-        for(const {sku} of sample.results) {
-          try {
-            const data=await rankedOptions(env,sku);
-            const current=JSON.parse(data.product.raw);
-            const best=data.options.find(o=>o.eligible && o.seller_id!==String(current.seller_sku_id) && o.price<data.product.price*(1-cfg.minSavingsPercent/100));
-            if(best) {
-              const saving=Math.round((1-best.price/data.product.price)*100);
-              await log(env,"WARN","better_seller_available",best.seller_name+" lebih murah "+saving+"% (Rp"+best.price+").",sku);
-            }
-          } catch(error) { await log(env,"WARN","proactive",error.message,sku); }
-        }
-        return;
-      }
 
       const known=await env.DB.prepare("SELECT count(*) total FROM api_discovery").first();
       const previous=await env.DB.prepare("SELECT value FROM app_settings WHERE key='discovery_last_attempt'").first();

@@ -531,3 +531,25 @@ test("remote save surfaces a bounded Digiflazz rejection detail",()=>{
   assert.match(source,/detail\.slice\(0,160\)/);
   assert.match(source,/Digiflazz menolak perubahan produk \(HTTP /);
 });
+
+
+test("deprecated price-only monitoring settings are removed from production defaults",()=>{
+  const defaultsBlock=source.slice(source.indexOf("const DEFAULTS"),source.indexOf("const secureHeaders"));
+  for(const key of ["proactiveScan","minSavingsPercent","reoptimizeHours","weights"]) assert.equal(defaultsBlock.includes(key),false);
+});
+
+test("settings validation exposes real batch and cooldown controls",()=>{
+  const current={cooldownHours:24,autoSwitchBatchSize:5,scanIntervalMinutes:5,minRating:4,minReviews:0,attentionRefreshBatchSize:5,priceTolerancePercent:2,saveMode:"manual",scanEnabled:true,dryRun:false,autoSwitch:true};
+  const next=validateSettings({cooldownHours:12,autoSwitchBatchSize:7,proactiveScan:true,minSavingsPercent:50,reoptimizeHours:4,weights:{price:100}},current);
+  assert.equal(next.cooldownHours,12);
+  assert.equal(next.autoSwitchBatchSize,7);
+  assert.equal("proactiveScan" in next,false);
+  assert.equal("minSavingsPercent" in next,false);
+  assert.equal("reoptimizeHours" in next,false);
+  assert.equal("weights" in next,false);
+});
+
+test("scheduled worker no longer runs the redundant price-only proactive monitor",()=>{
+  assert.doesNotMatch(source,/if\(cfg\.proactiveScan\)/);
+  assert.doesNotMatch(source,/better_seller_available/);
+});
