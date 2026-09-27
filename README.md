@@ -1,24 +1,105 @@
 # Digi Tools
 
-Dashboard pribadi untuk memantau katalog Digiflazz di https://tools.lfamiliastore.my.id. Kode sumber ini memakai Cloudflare Worker + D1 yang sudah ada, dilindungi Cloudflare Access.
+Dashboard pribadi untuk mengelola katalog dan Auto Switch seller Digiflazz di `https://tools.lfamiliastore.my.id`. Aplikasi berjalan di Cloudflare Worker + D1 dan akses dashboard dilindungi Cloudflare Access.
 
-## Fitur yang sudah aktif
+## Fitur production
 
-- Koneksi dari sesi yang disimpan terenkripsi AES-GCM di D1, uji sesi, dan pencarian jalur API tanpa menampilkan cookie.
-- Scan katalog dan kandidat seller dari endpoint Digiflazz yang dipakai dashboard mereka, perubahan harga, log, filter SKU, kunci produk dari otomasi, rating dan batas harga, ulasan minimal, prioritas/blokir seller, aturan per lingkup, grup zona, skor kandidat, proactive sampling, tambahan max price global, serta generator kode layanan dari inisial game dan jumlah nominal.
-- Tombol ganti seller manual dan set max price melakukan cek ulang data terbaru, satu POST ke endpoint dashboard Digiflazz, lalu membaca ulang hasilnya. Respons yang ambigu dikunci dan tidak diulang otomatis.
-- Skrip pendamping `extension/digi-select.user.js` berjalan langsung di halaman Digiflazz saat tombol pilih seller suatu produk ditekan. Ia memakai fungsi Vue halaman Digiflazz untuk memilih kandidat, menyimpan otomatis hanya bila diaktifkan, mengisi max price dari harga seller baru ditambah nilai global, dan mengisi kode deterministik pada form Tambah Produk yang dikenali. Pengaturan disimpan di browser; skrip tidak mengirim cookie atau data sesi ke server lain.
-- Cron 5 menit; interval scan bisa lebih panjang melalui panel. Auto-switch hanya dapat diaktifkan sesudah satu perubahan manual berhasil dikonfirmasi; default tetap pratinjau.
-- Semua permintaan dashboard diverifikasi memakai tanda tangan JWT Cloudflare Access. Domain Workers bawaan dinonaktifkan; akses pengguna hanya lewat domain yang sudah ada.
+- Sesi Digiflazz disimpan terenkripsi AES-GCM di D1. cURL GET baru diuji terlebih dahulu sebelum menggantikan sesi lama.
+- Scan katalog, seller aktif, harga, stok, cut-off, rating, SLA, perubahan harga, riwayat switch, dan log operasional.
+- Produk diurutkan berdasarkan brand/game lalu nominal terkecil ke terbesar, bukan berdasarkan harga seller.
+- Max Price hanya memakai **Max Price masing-masing produk Buyer di Digiflazz**. Tidak ada Max Price global atau price cap kedua di tools.
+- Seller wajib lolos rating minimal, status aktif, stok, cut-off, zona, dan Max Price produk.
+- Urutan Auto Switch: **rating minimum → SLA tercepat → toleransi harga → rating → jumlah ulasan → harga**. Jenis koneksi IP/API/H2H tidak memengaruhi ranking.
+- Default production saat ini memakai rating minimal 4 dan toleransi harga 2%.
+- Seller dapat berstatus **Biasa** atau **Blokir**. Mode seller Prioritas sudah dihapus agar tidak ada tie-break tersembunyi di luar algoritma utama.
+- Aturan khusus dapat diterapkan ke kategori, brand, tipe, atau SKU. Aturan khusus hanya mengubah rating minimal; proteksi stok dan cut-off tetap wajib.
+- Zona memakai pola deskripsi seller dan assignment SKU. Product ID tidak diperlukan.
+- Auto Switch hanya memasukkan SKU yang benar-benar punya kandidat pengganti yang memenuhi semua aturan. Produk bermasalah tanpa kandidat tetap muncul di **Perlu perhatian** tetapi tidak menghabiskan batch otomatis.
+- Cooldown perpindahan, batch Auto Switch, refresh rating/SLA, dan scan interval dapat dikonfigurasi dari panel.
+- Hasil HTTP 4xx Digiflazz diklasifikasikan sebagai penolakan pasti. Target seller yang baru ditolak tidak langsung dicoba ulang.
+- Seller options per SKU direfresh sebagai snapshot terbaru. Opsi seller lama yang sudah hilang di Digiflazz dibuang.
+- Produk yang endpoint seller-nya menghasilkan daftar kosong diberi backoff 6 jam; error refresh biasa diberi retry 30 menit agar slot refresh tidak macet pada SKU yang sama.
+- Ringkasan menampilkan **Perlu perhatian**, **Siap Auto Switch**, coverage rating/SLA, Max Price kosong, dan status scan.
+- Riwayat dan Log Sistem memiliki filter server-side untuk SKU, status, manual/otomatis, level log, jenis log, dan pencarian pesan.
 
-## Batas verifikasi
+## Auto Seller Browser
 
-Jalur daftar kandidat, pencarian SKU baru, perubahan produk, dan field seller dicocokkan dengan skrip serta respons baca dashboard Digiflazz. Hasil **POST** pada akun ini belum diuji: coba satu switch manual melalui dashboard sebelum mengaktifkan auto-switch. Respons POST yang tidak pasti dapat diperiksa ulang di detail SKU dan tidak diulang otomatis. Tombol set max price tersedia per produk; kalkulator dan generator kode di dashboard menyiapkan nilai, sedangkan skrip pendamping bekerja langsung pada halaman Digiflazz. Sebagian modul OtoSwitch seperti Telegram, langganan/billing dan kunci API eksternal tidak relevan atau belum tersedia di aplikasi pribadi ini. Jangan meletakkan cookie/sesi Digiflazz dalam issue atau commit.
+Userscript `extension/digi-select.user.js` adalah pendamping opsional ketika membuka dashboard Digiflazz secara langsung.
 
-## Auto Seller langsung pada Digiflazz di Android
+- Versi saat ini: **v2.0**.
+- Berjalan pada `member.digiflazz.com` dan menyinkronkan aturan seller non-rahasia dari `tools.lfamiliastore.my.id`.
+- Yang disinkronkan: rating minimum, ulasan minimum, toleransi harga, dan daftar seller diblokir.
+- Cookie atau token Digiflazz **tidak** disalin ke userscript melalui endpoint sinkronisasi.
+- Kontrol lokal browser hanya: aktif/nonaktif helper, mode simpan Manual/Otomatis, dan SKU otomatis.
+- Max Price tidak dihitung ulang oleh userscript.
+- SKU otomatis mengikuti inisial game + nominal, misalnya `Mobile Legends 5 Diamond → ML5` dan `Free Fire 1000 Diamond → FF1000`.
+- SKU yang sudah diisi manual tidak ditimpa.
+- Tombol **Isi semua SKU di halaman** tetap tersedia.
 
-Chrome Android tidak memasang ekstensi. Buka Firefox Android, pasang add-on [Violentmonkey](https://addons.mozilla.org/en-US/android/addon/violentmonkey/), lalu buka [digi-select.user.js](https://raw.githubusercontent.com/muhammadaldy198/digiflazz-tools/main/extension/digi-select.user.js) di Firefox untuk memasangnya. Versi 1.2 memakai mode injeksi `auto` dan `document-end` supaya tombol **⚡ Auto Seller** tetap dapat dibuat saat Firefox/halaman menerapkan CSP yang menghalangi injeksi langsung ke page context; skrip juga mencoba akses Vue melalui `wrappedJSObject` saat Violentmonkey jatuh ke content context. Login ke Digiflazz seperti biasa, buka Produk, lalu tekan pilihan seller pada satu produk. Tombol mengambang **⚡ Auto Seller** membuka panel rating minimal, batas harga, seller blokir/prioritas, mode simpan, dan **Tambahan max price untuk semua produk (Rp)**. Isi `1000` agar seller seharga Rp15.000 mendapat max price Rp16.000 setiap kali dipilih. Kode produk dibuat dari inisial game dan nominal, misalnya `Mobile Legends 5 Diamond → ML5` dan `Free Fire 1000DIAMOND → FF1000`. Mulai v1.4, panel tidak lagi meminta nama game/nominal satu per satu: opsi **Buat SKU otomatis untuk semua produk** aktif secara default, dan tombol **Isi semua SKU di halaman** mengisi seluruh field SKU yang sedang terdeteksi. Saat form Tambah Produk dibuka atau pilihan produk berubah, watcher juga mencoba mengisi SKU otomatis tanpa input manual. Mode awal **Manual** mengisi pilihan seller tanpa menyimpan produk sampai tombol Simpan Digiflazz ditekan. Mode **Otomatis** memakai tombol simpan Digiflazz yang sama. Pengaturan panel Digiflazz disimpan di browser itu sendiri; nilai global di dashboard disimpan terpisah untuk perpindahan seller melalui Worker. Skrip bergantung pada komponen Vue halaman Digiflazz; perubahan tampilan Digiflazz dapat memerlukan pembaruan skrip. Keberhasilan klik seller otomatis pada sesi browser asli masih perlu diuji di halaman login akun ini.
+Untuk Android, gunakan Firefox + Violentmonkey lalu pasang:
+
+`https://raw.githubusercontent.com/muhammadaldy198/digiflazz-tools/main/extension/digi-select.user.js`
+
+## Keamanan
+
+- Semua endpoint dashboard selain `/api/health` memverifikasi JWT Cloudflare Access.
+- Request mutasi non-GET/HEAD juga wajib memiliki `Origin` yang sama dengan domain tools.
+- Cookie/cURL Digiflazz tidak boleh dimasukkan ke issue, commit, atau file repo.
+- `SESSION_ENCRYPTION_KEY` tetap disimpan sebagai secret Cloudflare.
+- Domain `workers.dev` tidak digunakan untuk akses pengguna.
+- Operasi seller/harga dengan hasil ambigu tidak diulang buta; status `pending/unknown` harus direkonsiliasi sebelum mutasi berikutnya.
+
+## Cron dan alur production
+
+Cron Worker terpasang setiap 5 menit:
+
+`*/5 * * * *`
+
+Saat Auto Switch live:
+1. Full scan dan Auto Switch **tidak dijalankan pada invocation yang sama**.
+2. Full scan menggunakan cadence efektif dua kali interval scan agar batas subrequest Cloudflare Free tetap aman.
+3. Invocation lain memproses cache perhatian dan batch Auto Switch.
+4. Setelah switch sukses, produk dibaca ulang dari Digiflazz dan cache perhatian diperbarui.
+
+Production saat ini menggunakan:
+- scan enabled: true
+- Auto Switch: true
+- Mode Uji: false
+- scan interval: 5 menit
+- Auto Switch batch: 5 SKU
+- cooldown: 24 jam
+- refresh rating/SLA: 10 SKU per full scan
+- min rating: 4
+- min reviews: 0
+- toleransi harga: 2%
+
+Nilai production disimpan di D1 dan dapat berubah melalui panel; daftar di atas adalah konfigurasi yang diverifikasi saat dokumentasi ini diperbarui.
 
 ## Pengembangan
 
-Jalankan npm run check (Node.js 20+). npm run build membuat src/index.js dari src/worker.js dan src/ui.html; npm run deploy memakai Wrangler. Jalankan migrasi 0001–0004 pada D1 sebelum deploy. Secret SESSION_ENCRYPTION_KEY di Cloudflare harus tetap ada; jangan menaruh cURL, cookie, atau key dalam repo.
+Gunakan Node.js 20+.
+
+```bash
+npm install
+npm run check
+```
+
+`npm run check` menjalankan build, syntax check, pemeriksaan UI, dan seluruh regression test.
+
+`npm run build` menggabungkan:
+- `src/worker.js`
+- `src/ui.html`
+
+menjadi:
+- `src/index.js`
+
+Migrasi D1 yang digunakan saat ini:
+- `0001_init.sql`
+- `0002_digiflazz_connection.sql`
+- `0003_dashboard.sql`
+- `0003_manager.sql`
+- `0004_switch_operations.sql`
+- `0005_materialized_attention.sql`
+- `0006_quality_refresh_state.sql`
+
+Jangan hardcode cookie, token, secret, account ID, atau kredensial lain ke source.
