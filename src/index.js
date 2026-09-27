@@ -1004,7 +1004,7 @@ async function switchSeller(env, sku, sellerId, reason, preparedSelection = null
 }
 async function autoSwitchBatch(env, requestedLimit) {
   const cfg=await settings(env);
-  if(!cfg.autoSwitch || cfg.dryRun) throw Error("Aktifkan Auto-switch dan matikan mode Pratinjau terlebih dahulu.");
+  if(!cfg.autoSwitch || cfg.dryRun) throw Error("Aktifkan Auto Switch dan matikan Mode Uji terlebih dahulu.");
   const verified=await env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first();
   if(!verified) throw Error("Lakukan satu perpindahan seller manual yang berhasil sebelum menjalankan auto-switch.");
   const limit=Math.trunc(bounded(requestedLimit,1,10,cfg.autoSwitchBatchSize));
