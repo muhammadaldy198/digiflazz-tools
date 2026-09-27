@@ -368,7 +368,7 @@ async function scan(env, reason = "manual") {
     const qualityRefresh=await refreshAttentionCoverage(env,cfg.attentionRefreshBatchSize);
     if(qualityRefresh.skus?.length)await markAttentionDirty(env,qualityRefresh.skus);
     const cacheRefresh=await refreshAttentionCache(env,cfg,null,100);
-    const summary=await attentionSummary(env);
+    const summary=await attentionSummary(env,cfg);
     issues=summary.issues;
     await env.DB.prepare("UPDATE scan_runs SET status='success',finished_at=CURRENT_TIMESTAMP,total=?,issues=?,message=? WHERE id=?").bind(products.length,issues,reason,runId).run();
     await log(env,"INFO","scan",products.length+" produk dipindai; "+issues+" perlu perhatian; "+qualityRefresh.refreshed+" rating/SLA diperbarui; "+cacheRefresh.refreshed+" cache perhatian dihitung.");
