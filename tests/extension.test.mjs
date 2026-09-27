@@ -24,7 +24,7 @@ test("rejects blocked, inactive, unrated, and under reviewed alternatives",()=>{
 test("never selects an expensive or out of stock seller",()=>{
   const empty=candidate("empty","Empty",9000);empty.stock=0;
   assert.equal(chooseSeller([empty,candidate("expensive","Expensive",12500)],product,{minRating:4}),null);
-  assert.equal(chooseSeller([candidate("over","Over",11000)],product,{minRating:4,priceCap:10000}),null);
+  assert.equal(chooseSeller([candidate("over","Over",12100)],product,{minRating:4}),null);
 });
 
 test("seller priority is rating 4-5, then SLA, then cheapest price",()=>{
@@ -81,7 +81,7 @@ test("observes Digiflazz seller dialog without replacing its native button handl
 test("Firefox Android userscript uses forced content-context injection and visible panel",()=>{
   assert.match(source,/\/\/ @inject-into\s+content/);
   assert.match(source,/\/\/ @run-at\s+document-end/);
-  assert.match(source,/Auto Seller v1\.8 aktif/);
+  assert.match(source,/Auto Seller v1\.9 aktif/);
   assert.match(source,/wrappedJSObject/);
 });
 
@@ -144,4 +144,12 @@ test("userscript has no global Max Price controls or calculation",()=>{
   assert.doesNotMatch(source,/autoFillMaxPrice|maxPriceOffset|maxPriceForSeller/);
   assert.doesNotMatch(source,/id="fill"|id="offset"/);
   assert.match(source,/Max Price tidak diubah oleh skrip/);
+});
+
+
+test("userscript uses only per-product Max Price as seller price ceiling",()=>{
+  assert.doesNotMatch(source,/priceCap/);
+  assert.doesNotMatch(source,/id="cap"/);
+  assert.match(source,/const cap=Number\(product\?\.max_price\)>0\?Number\(product\.max_price\):Infinity/);
+  assert.match(source,/Satu-satunya batas harga adalah Max Price produk di Digiflazz/);
 });

@@ -21,11 +21,12 @@ test("seller filtering rejects blocked, expensive, and out of stock candidates",
 
 test("settings validate opt-in live switching and ignore removed global Max Price keys", () => {
   const current = { autoSwitch: false, dryRun: true };
-  const next=validateSettings({ autoSwitch: true, dryRun: false, maxPriceOffset:1000, autoFillMaxPrice:true, preserveMaxPrice:false }, current);
+  const next=validateSettings({ autoSwitch: true, dryRun: false, maxPriceOffset:1000, autoFillMaxPrice:true, preserveMaxPrice:false, priceCap:9999 }, current);
   assert.deepEqual([next.autoSwitch,next.dryRun],[true,false]);
   assert.equal("maxPriceOffset" in next,false);
   assert.equal("autoFillMaxPrice" in next,false);
   assert.equal("preserveMaxPrice" in next,false);
+  assert.equal("priceCap" in next,false);
 });
 
 test("seller selection requires known rating, review count, and active status", () => {
@@ -381,8 +382,9 @@ test("auto-switch reads only fresh cached attention targets",()=>{
 });
 
 test("rule preference zone and settings changes invalidate materialized attention",()=>{
-  assert.ok((source.match(/await markAttentionDirty\(env\);/g)||[]).length>=5);
-  assert.match(source,/await markAttentionDirty\(env,\[str\(b\.sku\)\]\)/);
+  assert.ok((source.match(/await markAttentionDirty\(env\);/g)||[]).length>=3);
+  assert.match(source,/await markAttentionDirty\(env,\[sku\]\)/);
+  assert.match(source,/await markAttentionDirty\(env,assigned\.results\.map\(x=>x\.sku\)\)/);
 });
 
 test("product mutations dirty or remove the corresponding attention cache",()=>{
@@ -459,4 +461,36 @@ test("cooldown is skipped instead of counted as failure",()=>{
   assert.match(source,/status:"skipped",reason:"cooldown"/);
   assert.match(source,/summary\.skipped/);
   assert.match(source,/dilewati/);
+});
+
+
+test("rank uses only product Max Price as price ceiling",()=>{
+  const product={max_price:10000};
+  const rows=[
+    {seller_name:"Within",seller_id:"a",price:9900,rating:4.8,stock:1,seller_status:1,sla:"H+0"},
+    {seller_name:"Over",seller_id:"b",price:10001,rating:5,stock:1,seller_status:1,sla:"H+0"}
+  ];
+  const result=rank(product,rows,[],{max_price:5000,min_rating:4,require_stock:1,avoid_cutoff:1},{minRating:4,minReviews:0,priceCap:1,priceTolerancePercent:2},null);
+  assert.equal(result.find(x=>x.seller_id==="a").eligible,true);
+  assert.equal(result.find(x=>x.seller_id==="b").eligible,false);
+});
+
+test("rule API validates catalog targets and removes rule price caps",()=>{
+  assert.match(source,/async function canonicalRuleTarget/);
+  assert.match(source,/Target aturan tidak ditemukan di katalog aktif/);
+  assert.match(source,/max_price=NULL/);
+  assert.match(source,/SELECT DISTINCT brand value FROM products/);
+  assert.doesNotMatch(source,/rule\?\.max_price, product\.max_price/);
+});
+
+test("zone API no longer requires Product ID and validates assignments",()=>{
+  assert.match(source,/INSERT INTO zones\(name,product_id,patterns\) VALUES\(\?,'',\?\)/);
+  assert.match(source,/SKU tidak ditemukan di katalog/);
+  assert.match(source,/Zona tidak ditemukan/);
+  assert.match(source,/assignment_count/);
+});
+
+test("backend defaults no longer contain a global seller price cap",()=>{
+  const defaultsBlock=source.slice(source.indexOf("const DEFAULTS"),source.indexOf("const secureHeaders"));
+  assert.doesNotMatch(defaultsBlock,/priceCap/);
 });

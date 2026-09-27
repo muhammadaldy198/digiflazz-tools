@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Digi Tools — Auto Select Seller
 // @namespace    https://tools.lfamiliastore.my.id/
-// @version      1.8.0
+// @version      1.9.0
 // @description  Pilih seller langsung di halaman produk Digiflazz. Sesi tetap di browser.
 // @match        https://member.digiflazz.com/*
 // @run-at       document-end
@@ -17,7 +17,7 @@
   "use strict";
   const testing=typeof module!=="undefined" && !!module.exports;
   const KEY = "digiTools.autoSeller.v1";
-  const DEFAULTS = {enabled:true,saveMode:"manual",minRating:4,minReviews:0,priceCap:0,priceTolerancePercent:2,autoServiceCode:true,preferred:"",blocked:""};
+  const DEFAULTS = {enabled:true,saveMode:"manual",minRating:4,minReviews:0,priceTolerancePercent:2,autoServiceCode:true,preferred:"",blocked:""};
   const str = value => String(value ?? "").trim();
   const names = value => new Set(str(value).split(/[\n,]/).map(x=>x.trim().toLowerCase()).filter(Boolean));
   function reviewCount(value) {
@@ -59,7 +59,7 @@
   }
   function chooseSeller(choices, product, options) {
     const cfg={...DEFAULTS,...options}, blocked=names(cfg.blocked), preferred=names(cfg.preferred);
-    const cap=Math.min(...[product?.max_price,cfg.priceCap].map(Number).filter(x=>x>0),Infinity);
+    const cap=Number(product?.max_price)>0?Number(product.max_price):Infinity;
     const minRating=Math.max(4,Math.min(5,Number(cfg.minRating)||4));
     const tolerance=Math.max(0,Math.min(20,Number(cfg.priceTolerancePercent)||0));
     const valid=(Array.isArray(choices)?choices:[]).filter(x=>{
@@ -270,14 +270,13 @@
       <div class="row"><label for="rating">Rating minimal<input id="rating" type="number" min="4" max="5" step="0.1"></label><label for="reviews">Ulasan minimal<input id="reviews" type="number" min="0"></label></div>
       <label for="tolerance">Toleransi harga (%)</label><input id="tolerance" type="number" min="0" max="20" step="0.1">
       <p>Seller dalam toleransi dari harga termurah dibandingkan lagi berdasarkan rating, ulasan, lalu harga.</p>
-      <label for="cap">Batas kandidat seller global (Rp; 0 = hanya Max Price produk)</label><input id="cap" type="number" min="0">
-      <p>Max Price tidak diubah oleh skrip. Batas utama tetap Max Price masing-masing produk di Digiflazz.</p>
+      <p>Max Price tidak diubah oleh skrip. <strong>Satu-satunya batas harga adalah Max Price produk di Digiflazz.</strong></p>
       <label><input id="code" type="checkbox"> Buat SKU otomatis untuk semua produk</label>
       <p><strong>Tidak perlu isi SKU satu-satu.</strong> Saat form produk muncul dan nama game + nominal terbaca, kode langsung dibuat: Mobile Legends 5 Diamond → ML5, Free Fire 1000 Diamond → FF1000.</p>
       <button id="fill-all-codes" type="button">⚡ Isi semua SKU di halaman</button>
       <label for="preferred">Seller prioritas (pisah koma)</label><textarea id="preferred"></textarea>
       <label for="blocked">Seller diblokir (pisah koma)</label><textarea id="blocked"></textarea>
-      <div id="status" class="status" role="status">Auto Seller v1.8 aktif. Tombol Digiflazz tidak diubah; pilih seller tetap bisa ditekan.</div>
+      <div id="status" class="status" role="status">Auto Seller v1.9 aktif. Tombol Digiflazz tidak diubah; pilih seller tetap bisa ditekan.</div>
     </div><button class="bubble" id="toggle" aria-label="Buka pengaturan auto seller">⚡ Auto Seller</button>`;
     const get=id=>ui.getElementById(id);
     get("enabled").checked=settings.enabled;
@@ -285,7 +284,6 @@
     get("rating").value=settings.minRating;
     get("reviews").value=settings.minReviews;
     get("tolerance").value=settings.priceTolerancePercent;
-    get("cap").value=settings.priceCap;
     get("code").checked=settings.autoServiceCode;
     get("preferred").value=settings.preferred;
     get("blocked").value=settings.blocked;
@@ -293,7 +291,7 @@
     get("toggle").onclick=()=>get("box").classList.toggle("open");
     get("fill-all-codes").onclick=()=>fillAllCodes(true);
     ui.addEventListener("change",()=>{
-      settings={enabled:get("enabled").checked,saveMode:get("mode").value,minRating:Math.min(5,Math.max(4,Number(get("rating").value)||4)),minReviews:Math.max(0,Number(get("reviews").value)||0),priceTolerancePercent:Math.min(20,Math.max(0,Number(get("tolerance").value)||0)),priceCap:Math.max(0,Number(get("cap").value)||0),autoServiceCode:get("code").checked,preferred:get("preferred").value,blocked:get("blocked").value};
+      settings={enabled:get("enabled").checked,saveMode:get("mode").value,minRating:Math.min(5,Math.max(4,Number(get("rating").value)||4)),minReviews:Math.max(0,Number(get("reviews").value)||0),priceTolerancePercent:Math.min(20,Math.max(0,Number(get("tolerance").value)||0)),autoServiceCode:get("code").checked,preferred:get("preferred").value,blocked:get("blocked").value};
       localStorage.setItem(KEY,JSON.stringify(settings));update("Pengaturan tersimpan di browser ini.");
     });
     (document.documentElement||document.body).append(host);
