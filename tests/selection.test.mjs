@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8").replace("const HTML = __HTML__;", "const HTML = '';");
-const { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons } = await import("data:text/javascript," + encodeURIComponent(source));
+const { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct } = await import("data:text/javascript," + encodeURIComponent(source));
 
 test("seller filtering rejects blocked, expensive, and out of stock candidates", () => {
   const product = { max_price: 11000 };
@@ -240,20 +240,30 @@ test("price tolerance setting validates and defaults to configurable 2 percent",
   assert.match(source,/priceTolerancePercent:\s*2/);
 });
 
-test("attention reasons cover operational quality price cutoff and unresolved operations",()=>{
+test("attention reasons cover hard issues and only flag slow SLA when a faster eligible candidate exists",()=>{
   const row={
     active:1,seller_name:"Current",seller_active:0,price:12000,max_price:11000,stock:0,unlimited_stock:0,
-    start_cut_off:"23:00",end_cut_off:"23:59",option_count:1,current_option_seller_id:"x",
+    start_cut_off:"23:00",end_cut_off:"23:59",option_count:2,current_option_seller_id:"x",
     current_rating:3.9,current_sla:"SLA H+1",operation_status:"unknown"
   };
-  const reasons=attentionReasons(row,{minRating:4},new Date("2026-09-27T16:30:00Z"));
+  const current={seller_id:"x",rating:3.9,review_value:10,price:12000,sla_days:1,eligible:false};
+  const best={seller_id:"y",rating:4.8,review_value:30,price:10000,sla_days:0,eligible:true};
+  const reasons=attentionReasons(row,{minRating:4},new Date("2026-09-27T16:30:00Z"),{current,best});
   assert.ok(reasons.includes("Seller OFF"));
   assert.ok(reasons.includes("Harga di atas max price"));
   assert.ok(reasons.includes("Stok habis"));
   assert.ok(reasons.includes("Sedang cut-off"));
   assert.ok(reasons.includes("Rating < 4"));
-  assert.ok(reasons.includes("SLA H+1"));
+  assert.ok(reasons.includes("SLA H+1 · kandidat H+0 tersedia"));
   assert.ok(reasons.includes("Hasil operasi belum pasti"));
+});
+
+test("slow SLA alone is not attention when no faster eligible seller exists",()=>{
+  const row={active:1,seller_name:"Current",seller_active:1,price:10000,max_price:12000,stock:10,unlimited_stock:0,option_count:2,current_option_seller_id:"x",current_rating:4.8,current_sla:"SLA H+1"};
+  const current={seller_id:"x",rating:4.8,review_value:30,price:10000,sla_days:1,eligible:true};
+  const best={...current};
+  const reasons=attentionReasons(row,{minRating:4},new Date(),{current,best});
+  assert.equal(reasons.some(x=>x.startsWith("SLA H+1")),false);
 });
 
 test("inactive products are not treated as operational attention unless an operation is unresolved",()=>{
@@ -292,4 +302,49 @@ test("full scans rotate the oldest rating and SLA coverage without mixing it int
   assert.match(source,/ORDER BY CASE WHEN max\(o\.last_seen\) IS NULL THEN 0 ELSE 1 END ASC,max\(o\.last_seen\) ASC/);
   assert.match(source,/const qualityRefresh=await refreshAttentionCoverage\(env,cfg\.attentionRefreshBatchSize\)/);
   assert.match(source,/qualityKnown=attention\.filter/);
+});
+
+
+test("product nominal parser handles game amounts and Indonesian thousand separators",()=>{
+  assert.equal(parseNominalToken("5"),5);
+  assert.equal(parseNominalToken("1.000.000"),1000000);
+  assert.equal(parseNominalToken("10.000"),10000);
+  assert.equal(productNominalValue({name:"Free Fire 5 Diamond",brand:"FREE FIRE",sku:"ff5"}),5);
+  assert.equal(productNominalValue({name:"PLN 1.000.000",brand:"PLN",sku:"pln1000"}),1000000);
+});
+
+test("product list sorts by brand then nominal instead of seller price",()=>{
+  const rows=[
+    {name:"Free Fire 100 Diamond",brand:"FREE FIRE",sku:"ff100",price:9000},
+    {name:"Free Fire 5 Diamond",brand:"FREE FIRE",sku:"ff5",price:50000},
+    {name:"Free Fire 20 Diamond",brand:"FREE FIRE",sku:"ff20",price:1000},
+    {name:"Axis 10.000",brand:"AXIS",sku:"ax10",price:100},
+    {name:"Axis 5.000",brand:"AXIS",sku:"ax5",price:99999}
+  ];
+  const sorted=[...rows].sort(productSortCompare);
+  assert.deepEqual(sorted.map(x=>x.sku),["ax5","ax10","ff5","ff20","ff100"]);
+});
+
+test("same-SLA better quality within ranked rules becomes actionable attention",()=>{
+  const row={active:1,seller_name:"Current",seller_active:1,price:1432,max_price:1500,stock:10,unlimited_stock:0,option_count:2,current_option_seller_id:"x",current_rating:4.75,current_sla:"H+0"};
+  const current={seller_id:"x",rating:4.75,review_value:10,price:1432,sla_days:0,eligible:true};
+  const best={seller_id:"y",rating:5,review_value:10,price:1437,sla_days:0,eligible:true};
+  const reasons=attentionReasons(row,{minRating:4},new Date(),{current,best});
+  assert.ok(reasons.includes("Rating lebih baik tersedia (5)"));
+});
+
+test("product-specific rule wins over broader rule for attention ranking",()=>{
+  const product={sku:"ml5",product_type:"Umum",brand:"MOBILE LEGENDS",category:"Games"};
+  const rules=[
+    {id:1,is_active:1,scope_type:"global",scope_value:"",min_rating:4},
+    {id:2,is_active:1,scope_type:"brand",scope_value:"MOBILE LEGENDS",min_rating:4.5},
+    {id:3,is_active:1,scope_type:"product",scope_value:"ml5",min_rating:4.8}
+  ];
+  assert.equal(matchingRuleForProduct(product,rules).id,3);
+});
+
+test("product API sorts before pagination and supports active inactive filters",()=>{
+  assert.match(source,/filtered=\[\.\.\.filtered\]\.sort\(productSortCompare\)/);
+  assert.match(source,/status==="active"/);
+  assert.match(source,/status==="inactive"/);
 });
