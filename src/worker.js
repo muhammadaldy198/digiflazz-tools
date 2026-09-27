@@ -729,8 +729,33 @@ async function refreshAttentionCache(env, config, skus=null, limit=50) {
   const pending=await env.DB.prepare("SELECT count(*) total FROM products p LEFT JOIN product_attention a ON a.sku=p.sku WHERE a.sku IS NULL OR a.dirty=1").first();
   return {refreshed,pending:Number(pending?.total)||0};
 }
-async function attentionSummary(env) {
-  const [summary,quality]=await Promise.all([
+function autoSwitchCooldownCutoff(config) {
+  return new Date(Date.now()-Number(config.cooldownHours||24)*3600000).toISOString().replace("T"," ").slice(0,19);
+}
+const ACTIONABLE_ATTENTION_FROM=`FROM product_attention a
+  JOIN products p ON p.sku=a.sku
+  LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku
+  LEFT JOIN switch_operations op ON op.sku=p.sku
+  WHERE a.dirty=0 AND a.needs_attention=1 AND p.active=1
+    AND p.max_price>0
+    AND a.best_candidate_seller IS NOT NULL
+    AND l.buyer_sku_code IS NULL
+    AND COALESCE(op.status,'') NOT IN ('pending','unknown')
+    AND NOT EXISTS (
+      SELECT 1 FROM switch_history sh
+      WHERE sh.buyer_sku_code=p.sku AND sh.status='success' AND sh.created_at>?
+    )`;
+async function actionableAttentionCount(env, config) {
+  const row=await env.DB.prepare("SELECT count(*) total "+ACTIONABLE_ATTENTION_FROM).bind(autoSwitchCooldownCutoff(config)).first();
+  return Number(row?.total)||0;
+}
+async function actionableAttentionRows(env, config, limit) {
+  return env.DB.prepare(`SELECT p.sku,p.last_seen,a.reasons_json `+ACTIONABLE_ATTENTION_FROM+`
+    ORDER BY p.last_seen ASC,p.sku ASC LIMIT ?`)
+    .bind(autoSwitchCooldownCutoff(config),Math.trunc(bounded(limit,1,10,5))).all();
+}
+async function attentionSummary(env, config) {
+  const [summary,quality,autoReady]=await Promise.all([
     env.DB.prepare(`SELECT
       count(*) products,
       sum(CASE WHEN p.active=1 THEN 1 ELSE 0 END) activeProducts,
@@ -743,13 +768,15 @@ async function attentionSummary(env) {
       sum(CASE WHEN a.sku IS NULL OR a.dirty=1 THEN 1 ELSE 0 END) attentionPending,
       sum(CASE WHEN a.dirty=0 THEN 1 ELSE 0 END) attentionFresh
     FROM products p LEFT JOIN product_attention a ON a.sku=p.sku`).first(),
-    env.DB.prepare("SELECT count(DISTINCT o.sku) total FROM seller_options o JOIN products p ON p.sku=o.sku WHERE p.active=1").first()
+    env.DB.prepare("SELECT count(DISTINCT o.sku) total FROM seller_options o JOIN products p ON p.sku=o.sku WHERE p.active=1").first(),
+    actionableAttentionCount(env,config)
   ]);
   return {
     products:Number(summary?.products)||0,
     activeProducts:Number(summary?.activeProducts)||0,
     missingMaxPrice:Number(summary?.missingMaxPrice)||0,
     issues:Number(summary?.issues)||0,
+    autoSwitchReady:autoReady,
     qualityKnown:Number(quality?.total)||0,
     attentionFresh:Number(summary?.attentionFresh)||0,
     attentionPending:Number(summary?.attentionPending)||0,
@@ -981,22 +1008,7 @@ async function autoSwitchBatch(env, requestedLimit) {
   const verified=await env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first();
   if(!verified) throw Error("Lakukan satu perpindahan seller manual yang berhasil sebelum menjalankan auto-switch.");
   const limit=Math.trunc(bounded(requestedLimit,1,10,cfg.autoSwitchBatchSize));
-  const cooldownCutoff=new Date(Date.now()-cfg.cooldownHours*3600000).toISOString().replace("T"," ").slice(0,19);
-  const rows=await env.DB.prepare(`SELECT p.sku,p.last_seen,a.reasons_json
-    FROM product_attention a
-    JOIN products p ON p.sku=a.sku
-    LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku
-    LEFT JOIN switch_operations op ON op.sku=p.sku
-    WHERE a.dirty=0 AND a.needs_attention=1 AND p.active=1
-      AND p.max_price>0
-      AND a.best_candidate_seller IS NOT NULL
-      AND l.buyer_sku_code IS NULL
-      AND COALESCE(op.status,'') NOT IN ('pending','unknown')
-      AND NOT EXISTS (
-        SELECT 1 FROM switch_history sh
-        WHERE sh.buyer_sku_code=p.sku AND sh.status='success' AND sh.created_at>?
-      )
-    ORDER BY p.last_seen ASC,p.sku ASC LIMIT ?`).bind(cooldownCutoff,limit).all();
+  const rows=await actionableAttentionRows(env,cfg,limit);
   const targets=rows.results.map(row=>{
     let attention_reasons=[];
     try { attention_reasons=JSON.parse(row.reasons_json||"[]"); } catch {}
@@ -1112,7 +1124,7 @@ async function api(req, env, url) {
     if (method==="GET" && path==="/api/bootstrap") {
       const cfg=await settings(env);
       const [c, counts, sellerCount, last, events, verified]=await Promise.all([
-        conn(env),attentionSummary(env),
+        conn(env),attentionSummary(env,cfg),
         env.DB.prepare("SELECT count(*) total FROM sellers").first(),
         env.DB.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").first(),
         env.DB.prepare("SELECT id,level,kind,sku,message,created_at FROM events ORDER BY id DESC LIMIT 8").all(),
@@ -1161,18 +1173,24 @@ async function api(req, env, url) {
       const status=str(url.searchParams.get("status"));
       const category=str(url.searchParams.get("category")).slice(0,120);
       const brand=str(url.searchParams.get("brand")).slice(0,120);
+      const cfg=status==="actionable"?await settings(env):null;
       let where="WHERE (p.sku LIKE ? OR p.name LIKE ? OR p.brand LIKE ? OR p.category LIKE ?)";
       const args=[q,q,q,q];
       if(category){where+=" AND p.category=?";args.push(category)}
       if(brand){where+=" AND p.brand=?";args.push(brand)}
       if(status==="issues")where+=" AND a.dirty=0 AND a.needs_attention=1";
+      else if(status==="actionable"){
+        where+=" AND a.dirty=0 AND a.needs_attention=1 AND p.active=1 AND p.max_price>0 AND a.best_candidate_seller IS NOT NULL AND l.buyer_sku_code IS NULL AND COALESCE(op.status,'') NOT IN ('pending','unknown') AND NOT EXISTS (SELECT 1 FROM switch_history sh WHERE sh.buyer_sku_code=p.sku AND sh.status='success' AND sh.created_at>?)";
+        args.push(autoSwitchCooldownCutoff(cfg));
+      }
       else if(status==="missing-max")where+=" AND p.max_price<=0";
       else if(status==="locked")where+=" AND l.buyer_sku_code IS NOT NULL";
       else if(status==="active")where+=" AND p.active=1";
       else if(status==="inactive")where+=" AND p.active=0";
       const from=` FROM products p
         LEFT JOIN product_attention a ON a.sku=p.sku
-        LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku `;
+        LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku
+        LEFT JOIN switch_operations op ON op.sku=p.sku `;
       const brandSql=category?"SELECT DISTINCT brand FROM products WHERE category=? AND brand<>'' ORDER BY brand COLLATE NOCASE":"SELECT DISTINCT brand FROM products WHERE brand<>'' ORDER BY brand COLLATE NOCASE";
       const [count,rows,categories,brands]=await Promise.all([
         env.DB.prepare("SELECT count(*) total"+from+where).bind(...args).first(),
