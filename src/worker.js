@@ -1191,6 +1191,7 @@ async function api(req, env, url) {
       const sku=decodeURIComponent(lock[1]),body=await getJson(req);
       if(bool(body.locked)) await env.DB.prepare("INSERT INTO product_locks(buyer_sku_code,reason) VALUES(?,?) ON CONFLICT(buyer_sku_code) DO UPDATE SET reason=excluded.reason").bind(sku,str(body.reason)).run();
       else await env.DB.prepare("DELETE FROM product_locks WHERE buyer_sku_code=?").bind(sku).run();
+      await markAttentionDirty(env,[sku]);
       return reply({ok:true,locked:bool(body.locked)});
     }
     const change=path.match(/^\/api\/products\/([^/]+)\/switch$/);
@@ -1231,6 +1232,7 @@ async function api(req, env, url) {
       if(!["preferred","blocked","none"].includes(body.mode))throw Error("Pilihan tidak valid.");
       await env.DB.prepare("DELETE FROM seller_preferences WHERE seller_name=?").bind(name).run();
       if(body.mode!=="none") await env.DB.prepare("INSERT INTO seller_preferences(seller_name,mode) VALUES(?,?)").bind(name,body.mode).run();
+      await markAttentionDirty(env);
       return reply({ok:true,mode:body.mode});
     }
     if(method==="GET"&&path==="/api/rules") {
@@ -1242,11 +1244,13 @@ async function api(req, env, url) {
       if(!["global","category","brand","type","product"].includes(b.scope_type))throw Error("Cakupan tidak valid.");
       if(b.scope_type!=="global"&&!str(b.scope_value))throw Error("Target aturan wajib diisi.");
       const r=await env.DB.prepare("INSERT INTO seller_rules(scope_type,scope_value,min_rating,max_price,require_stock,avoid_cutoff) VALUES(?,?,?,?,?,?)").bind(b.scope_type,str(b.scope_value),b.min_rating==null?null:bounded(b.min_rating,0,5),b.max_price==null?null:bounded(b.max_price,0,1000000000),bool(b.require_stock)?1:0,bool(b.avoid_cutoff)?1:0).run();
+      await markAttentionDirty(env);
       return reply({ok:true,id:r.meta.last_row_id});
     }
     const rule=path.match(/^\/api\/rules\/(\d+)$/);
     if(method==="DELETE"&&rule) {
       await env.DB.prepare("DELETE FROM seller_rules WHERE id=?").bind(Number(rule[1])).run();
+      await markAttentionDirty(env);
       return reply({ok:true});
     }
     if(method==="GET"&&path==="/api/zones") {
@@ -1257,11 +1261,13 @@ async function api(req, env, url) {
       const b=await getJson(req),patterns=str(b.patterns).split(",").map(x=>x.trim()).filter(Boolean);
       if(!str(b.name)||!str(b.product_id)||!patterns.length)throw Error("Nama, product ID, dan pola zona wajib diisi.");
       const r=await env.DB.prepare("INSERT INTO zones(name,product_id,patterns) VALUES(?,?,?)").bind(str(b.name),str(b.product_id),JSON.stringify(patterns)).run();
+      await markAttentionDirty(env);
       return reply({ok:true,id:r.meta.last_row_id});
     }
     const zone=path.match(/^\/api\/zones\/(\d+)$/);
     if(method==="DELETE"&&zone) {
       await env.DB.prepare("DELETE FROM zones WHERE id=?").bind(Number(zone[1])).run();
+      await markAttentionDirty(env);
       return reply({ok:true});
     }
     if(method==="POST"&&path==="/api/zones/assign") {
@@ -1269,6 +1275,7 @@ async function api(req, env, url) {
       if(!str(b.sku))throw Error("SKU wajib diisi.");
       if(b.zone_id) await env.DB.prepare("INSERT INTO zone_assignments(sku,zone_id) VALUES(?,?) ON CONFLICT(sku) DO UPDATE SET zone_id=excluded.zone_id").bind(str(b.sku),Number(b.zone_id)).run();
       else await env.DB.prepare("DELETE FROM zone_assignments WHERE sku=?").bind(str(b.sku)).run();
+      await markAttentionDirty(env,[str(b.sku)]);
       return reply({ok:true});
     }
     if(method==="GET"&&path==="/api/events") {
@@ -1292,6 +1299,7 @@ async function api(req, env, url) {
       }
       const operations=Object.entries(next).map(([k,v])=>env.DB.prepare("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP").bind(k,JSON.stringify(v)));
       await env.DB.batch(operations);
+      await markAttentionDirty(env);
       return reply({ok:true,settings:next});
     }
     if(method==="POST"&&path==="/api/service-code") {
