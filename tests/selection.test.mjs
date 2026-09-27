@@ -297,7 +297,8 @@ test("attention quality refresh batch is configurable and bounded",()=>{
 
 test("full scans rotate rating SLA coverage and update only materialized cache batches",()=>{
   assert.match(source,/async function refreshAttentionCoverage/);
-  assert.match(source,/ORDER BY CASE WHEN max\(o\.last_seen\) IS NULL THEN 0 ELSE 1 END ASC,max\(o\.last_seen\) ASC/);
+  assert.match(source,/ORDER BY CASE WHEN max\(o\.last_seen\) IS NULL THEN 0 ELSE 1 END ASC/);
+  assert.match(source,/COALESCE\(max\(o\.last_seen\),q\.last_attempt,'1970-01-01 00:00:00'\) ASC/);
   assert.match(source,/const qualityRefresh=await refreshAttentionCoverage\(env,cfg\.attentionRefreshBatchSize\)/);
   assert.match(source,/const cacheRefresh=await refreshAttentionCache\(env,cfg,null,100\)/);
   assert.match(source,/attentionSummary\(env,cfg\)/);
@@ -658,4 +659,32 @@ test("legacy global seller rules are ignored",()=>{
   const product={sku:"ml5",product_type:"Game",brand:"MOBILE LEGENDS",category:"Games"};
   const rules=[{id:1,is_active:1,scope_type:"global",scope_value:"",min_rating:5}];
   assert.equal(matchingRuleForProduct(product,rules),null);
+});
+
+
+test("seller option refresh replaces stale cached options for a SKU",()=>{
+  const block=source.slice(source.indexOf("async function refreshOptions"),source.indexOf("async function refreshAttentionCoverage"));
+  assert.match(block,/DELETE FROM seller_options WHERE sku=\?/);
+  assert.ok(block.indexOf("DELETE FROM seller_options WHERE sku=?") < block.indexOf("for (let i=0;i<cmds.length"));
+});
+
+test("empty seller-option results back off for six hours",()=>{
+  const block=source.slice(source.indexOf("async function refreshAttentionCoverage"),source.indexOf("async function rankedOptions"));
+  assert.match(block,/LEFT JOIN quality_refresh_state q ON q\.sku=p\.sku/);
+  assert.match(block,/q\.next_retry_at IS NULL OR q\.next_retry_at<=CURRENT_TIMESTAMP/);
+  assert.match(block,/last_result='empty'/);
+  assert.match(block,/datetime\('now','\+6 hours'\)/);
+  assert.match(block,/tidak punya kandidat seller; dicoba lagi setelah 6 jam/);
+});
+
+test("seller quality refresh errors receive a short retry backoff",()=>{
+  const block=source.slice(source.indexOf("async function refreshAttentionCoverage"),source.indexOf("async function rankedOptions"));
+  assert.match(block,/last_result='error'/);
+  assert.match(block,/datetime\('now','\+30 minutes'\)/);
+});
+
+test("empty seller refreshes still invalidate attention for recalculation",()=>{
+  const block=source.slice(source.indexOf("async function refreshAttentionCoverage"),source.indexOf("async function rankedOptions"));
+  assert.match(block,/refreshedSkus\.push\(row\.sku\)/);
+  assert.match(block,/return \{refreshed,empty,failed,skus:refreshedSkus\}/);
 });
