@@ -332,10 +332,9 @@ test("same-SLA better quality within ranked rules becomes actionable attention",
   assert.ok(reasons.includes("Rating lebih baik tersedia (5)"));
 });
 
-test("product-specific rule wins over broader rule for attention ranking",()=>{
+test("product-specific rule wins over broader specific rule for attention ranking",()=>{
   const product={sku:"ml5",product_type:"Umum",brand:"MOBILE LEGENDS",category:"Games"};
   const rules=[
-    {id:1,is_active:1,scope_type:"global",scope_value:"",min_rating:4},
     {id:2,is_active:1,scope_type:"brand",scope_value:"MOBILE LEGENDS",min_rating:4.5},
     {id:3,is_active:1,scope_type:"product",scope_value:"ml5",min_rating:4.8}
   ];
@@ -465,14 +464,18 @@ test("rank uses only product Max Price as price ceiling",()=>{
     {seller_name:"Within",seller_id:"a",price:9900,rating:4.8,stock:1,seller_status:1,sla:"H+0"},
     {seller_name:"Over",seller_id:"b",price:10001,rating:5,stock:1,seller_status:1,sla:"H+0"}
   ];
-  const result=rank(product,rows,[],{max_price:5000,min_rating:4,require_stock:1,avoid_cutoff:1},{minRating:4,minReviews:0,priceCap:1,priceTolerancePercent:2},null);
+  const result=rank(product,rows,[],{max_price:5000,min_rating:4},{minRating:4,minReviews:0,priceCap:1,priceTolerancePercent:2},null);
   assert.equal(result.find(x=>x.seller_id==="a").eligible,true);
   assert.equal(result.find(x=>x.seller_id==="b").eligible,false);
 });
 
-test("rule API validates catalog targets and removes rule price caps",()=>{
+test("rule API only allows specific rating overrides and fixes stock cutoff safety on",()=>{
   assert.match(source,/async function canonicalRuleTarget/);
   assert.match(source,/Target aturan tidak ditemukan di katalog aktif/);
+  assert.match(source,/\["category","brand","type","product"\]\.includes\(scope\)/);
+  assert.doesNotMatch(source,/\["global","category","brand","type","product"\]/);
+  assert.match(source,/require_stock=1,avoid_cutoff=1/);
+  assert.match(source,/VALUES\(\?,\?,\?,NULL,1,1\)/);
   assert.match(source,/max_price=NULL/);
   assert.match(source,/SELECT DISTINCT brand value FROM products/);
   assert.doesNotMatch(source,/rule\?\.max_price, product\.max_price/);
@@ -636,4 +639,23 @@ test("full scan passes settings into actionable attention summary",()=>{
   assert.match(scanBlock,/const cfg=await settings\(env\)/);
   assert.match(scanBlock,/attentionSummary\(env,cfg\)/);
   assert.doesNotMatch(scanBlock,/attentionSummary\(env\)(?!,)/);
+});
+
+
+test("seller rules cannot disable stock or cutoff safety",()=>{
+  const product={max_price:20000};
+  const nowCutoff="00:00";
+  const rows=[
+    {seller_id:"empty",seller_name:"Empty",price:10000,rating:5,review_count:"100+",stock:0,unlimited_stock:0,seller_status:1,sla:"H+0",start_cut_off:null,end_cut_off:null},
+    {seller_id:"healthy",seller_name:"Healthy",price:11000,rating:4.5,review_count:"100+",stock:10,unlimited_stock:0,seller_status:1,sla:"H+0",start_cut_off:null,end_cut_off:null}
+  ];
+  const ranked=rank(product,rows,[],{min_rating:4,require_stock:0,avoid_cutoff:0},{minRating:4,minReviews:0,priceTolerancePercent:2},null);
+  assert.equal(ranked.find(x=>x.seller_id==="empty").eligible,false);
+  assert.ok(ranked.find(x=>x.seller_id==="empty").reasons.includes("Stok habis"));
+});
+
+test("legacy global seller rules are ignored",()=>{
+  const product={sku:"ml5",product_type:"Game",brand:"MOBILE LEGENDS",category:"Games"};
+  const rules=[{id:1,is_active:1,scope_type:"global",scope_value:"",min_rating:5}];
+  assert.equal(matchingRuleForProduct(product,rules),null);
 });
