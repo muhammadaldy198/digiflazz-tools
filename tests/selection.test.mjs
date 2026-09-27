@@ -688,3 +688,38 @@ test("empty seller refreshes still invalidate attention for recalculation",()=>{
   assert.match(block,/refreshedSkus\.push\(row\.sku\)/);
   assert.match(block,/return \{refreshed,empty,failed,skus:refreshedSkus\}/);
 });
+
+
+test("API keeps only health public and requires Cloudflare Access for every other route",()=>{
+  const apiStart=source.indexOf("async function api(req, env, url)");
+  const apiEnd=source.indexOf("export {",apiStart);
+  const apiBlock=source.slice(apiStart,apiEnd);
+  const healthPos=apiBlock.indexOf('path==="/api/health"');
+  const authPos=apiBlock.indexOf('if (!await authorize(req,env))');
+  const bootstrapPos=apiBlock.indexOf('path==="/api/bootstrap"');
+  assert.ok(healthPos>=0);
+  assert.ok(authPos>healthPos);
+  assert.ok(bootstrapPos>authPos);
+  assert.match(apiBlock,/return failure\("Akses pribadi diperlukan\.",401\)/);
+});
+
+test("API mutations require same-origin requests after Access authorization",()=>{
+  const apiStart=source.indexOf("async function api(req, env, url)");
+  const apiEnd=source.indexOf("export {",apiStart);
+  const apiBlock=source.slice(apiStart,apiEnd);
+  const authPos=apiBlock.indexOf('if (!await authorize(req,env))');
+  const originPos=apiBlock.indexOf('req.headers.get("origin")!==url.origin');
+  assert.ok(originPos>authPos);
+  assert.match(apiBlock,/method!=="GET" && method!=="HEAD"/);
+  assert.match(apiBlock,/return failure\("Asal permintaan tidak sah\.",403\)/);
+});
+
+test("top-level fetch never serves dashboard HTML before Access authorization",()=>{
+  const fetchStart=source.indexOf("export default {");
+  const fetchBlock=source.slice(fetchStart);
+  assert.match(fetchBlock,/if\(url\.pathname\.startsWith\("\/api\/"\)\) return api\(req,env,url\)/);
+  assert.match(fetchBlock,/if\(!await authorize\(req,env\)\) return failure\("Akses pribadi diperlukan\.",401\)/);
+  const authPos=fetchBlock.indexOf('if(!await authorize(req,env))');
+  const htmlPos=fetchBlock.indexOf("return new Response(HTML");
+  assert.ok(authPos>=0&&htmlPos>authPos);
+});
