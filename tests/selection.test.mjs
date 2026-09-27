@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8").replace("const HTML = __HTML__;", "const HTML = '';");
-const { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays } = await import("data:text/javascript," + encodeURIComponent(source));
+const { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays, validBuyerSku } = await import("data:text/javascript," + encodeURIComponent(source));
 
 test("seller filtering rejects blocked, expensive, and out of stock candidates", () => {
   const product = { max_price: 11000 };
@@ -167,4 +167,28 @@ test("Digiflazz seller-directory 403 is backed off instead of treated as a dead 
   assert.match(source,/seller_directory_retry_after/);
   assert.match(source,/Endpoint direktori seller Digiflazz ditolak HTTP 403/);
   assert.match(source,/Sesi belum tentu kedaluwarsa/);
+});
+
+
+test("buyer SKU validation accepts practical codes and rejects unsafe values",()=>{
+  assert.equal(validBuyerSku("ML5"),true);
+  assert.equal(validBuyerSku("ff100.id"),true);
+  assert.equal(validBuyerSku("ABC_DEF-1"),true);
+  assert.equal(validBuyerSku("ML 5"),false);
+  assert.equal(validBuyerSku(""),false);
+});
+
+test("direct product controls write to Digiflazz fields and verify destructive actions",()=>{
+  assert.match(source,/remoteSave\(env,\{\.\.\.current,code:newSku,change:true\}\)/);
+  assert.match(source,/remoteSave\(env,\{\.\.\.current,status:active,change:true\}\)/);
+  assert.match(source,/\/api\/v1\/buyer\/product\/delete\//);
+  assert.match(source,/const verified=await findProductBySku\(env,newSku\)/);
+  assert.match(source,/const after=await findProductBySku\(env,sku\)/);
+});
+
+test("product control routes expose SKU status and delete actions",()=>{
+  assert.ok(source.includes("const skuEdit=path.match"));
+  assert.ok(source.includes("const statusEdit=path.match"));
+  assert.ok(source.includes("const productDelete=path.match"));
+  assert.match(source,/method==="DELETE"&&productDelete/);
 });

@@ -427,13 +427,101 @@ async function rankedOptions(env, sku, refresh = true) {
   ]);
   return { product, config, options:rank(product, options.results, preferences.results, rule, config, zone?{patterns:JSON.parse(zone.patterns)}:null) };
 }
-async function freshProduct(env, sku) {
-  const result = await remoteJson(env,"/api/v1/buyer/product/search/sku/" + encodeURIComponent(sku));
+async function findProductBySku(env, sku) {
+  let result;
+  try {
+    result = await remoteJson(env,"/api/v1/buyer/product/search/sku/" + encodeURIComponent(sku));
+  } catch(error) {
+    if(error?.status===404)return null;
+    throw error;
+  }
   const rows = listOf(result,["data","data.data","products"]);
   if (!rows) throw Error("Digiflazz tidak mengembalikan daftar produk terbaru.");
-  const row = rows.find(x=>normalizeProduct(x)?.sku === sku);
+  return rows.find(x=>normalizeProduct(x)?.sku === sku) || null;
+}
+async function freshProduct(env, sku) {
+  const row=await findProductBySku(env,sku);
   if (!row) throw Error("SKU tidak ditemukan pada data terbaru Digiflazz.");
   return row;
+}
+function validBuyerSku(value) {
+  return /^[A-Za-z0-9._-]{1,50}$/.test(str(value));
+}
+async function remoteProductDelete(env, productId) {
+  const row=await conn(env);
+  if(!row||!env.SESSION_ENCRYPTION_KEY)throw Error("Sesi Digiflazz belum terhubung.");
+  if(!/^[A-Za-z0-9_-]{1,80}$/.test(str(productId)))throw Error("ID produk Digiflazz tidak valid.");
+  const session=await unseal(row,env.SESSION_ENCRYPTION_KEY);
+  const headers={...session.headers,accept:"application/json",origin:"https://member.digiflazz.com",referer:"https://member.digiflazz.com/buyer-area"};
+  delete headers.host;
+  const res=await fetch("https://member.digiflazz.com/api/v1/buyer/product/delete/"+encodeURIComponent(productId),{method:"POST",headers,redirect:"manual",signal:AbortSignal.timeout(20000)});
+  if(!res.ok)throw Error("Digiflazz menolak penghapusan produk (HTTP "+res.status+").");
+  if(res.headers.get("content-type")?.includes("json")) {
+    const data=await res.json();
+    if(data.status===false||data.success===false||data.error)throw Error("Digiflazz tidak menerima penghapusan produk.");
+    return data;
+  }
+  return {ok:true};
+}
+async function ensureNoPendingProductOperation(env,sku) {
+  const op=await env.DB.prepare("SELECT status FROM switch_operations WHERE sku=? AND status IN ('pending','unknown')").bind(sku).first();
+  if(op)throw Error("Produk masih punya operasi seller/harga yang belum selesai. Rekonsiliasi dulu sebelum mengubah produk.");
+}
+async function updateBuyerSku(env,oldSku,newSku) {
+  oldSku=str(oldSku);newSku=str(newSku);
+  if(!validBuyerSku(newSku))throw Error("SKU hanya boleh huruf, angka, titik, garis bawah, atau minus; maksimal 50 karakter.");
+  if(oldSku.toLowerCase()===newSku.toLowerCase()&&oldSku!==newSku)throw Error("Perubahan huruf besar/kecil saja tidak didukung.");
+  if(oldSku===newSku)return {ok:true,sku:newSku,unchanged:true};
+  await ensureNoPendingProductOperation(env,oldSku);
+  const duplicate=await env.DB.prepare("SELECT sku FROM products WHERE lower(sku)=lower(?) AND sku<>? LIMIT 1").bind(newSku,oldSku).first();
+  if(duplicate)throw Error("SKU "+newSku+" sudah dipakai produk lain.");
+  const current=await freshProduct(env,oldSku);
+  const remoteDuplicate=await findProductBySku(env,newSku);
+  if(remoteDuplicate&&String(remoteDuplicate.id)!==String(current.id))throw Error("SKU "+newSku+" sudah dipakai di Digiflazz.");
+  await remoteSave(env,{...current,code:newSku,change:true});
+  const verified=await findProductBySku(env,newSku);
+  if(!verified||String(verified.id)!==String(current.id))throw Error("Perubahan SKU belum terkonfirmasi di Digiflazz. Jangan ulangi sebelum memeriksa produk.");
+  const normalized=normalizeProduct(verified);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE products SET sku=?,raw=?,active=?,seller_active=?,price=?,max_price=?,stock=?,unlimited_stock=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(newSku,JSON.stringify(verified),normalized.active,normalized.seller_active,normalized.price,normalized.max_price,normalized.stock,normalized.unlimited_stock,oldSku),
+    env.DB.prepare("UPDATE seller_options SET sku=? WHERE sku=?").bind(newSku,oldSku),
+    env.DB.prepare("UPDATE product_locks SET buyer_sku_code=? WHERE buyer_sku_code=?").bind(newSku,oldSku),
+    env.DB.prepare("UPDATE zone_assignments SET sku=? WHERE sku=?").bind(newSku,oldSku),
+    env.DB.prepare("UPDATE switch_operations SET sku=? WHERE sku=?").bind(newSku,oldSku),
+    env.DB.prepare("UPDATE seller_rules SET scope_value=? WHERE scope_type='product' AND scope_value=?").bind(newSku,oldSku)
+  ]);
+  await log(env,"INFO","product-sku","SKU Digiflazz diubah: "+oldSku+" → "+newSku,newSku);
+  return {ok:true,oldSku,sku:newSku,verified:true};
+}
+async function setBuyerProductStatus(env,sku,active) {
+  sku=str(sku);active=!!active;
+  await ensureNoPendingProductOperation(env,sku);
+  const current=await freshProduct(env,sku);
+  await remoteSave(env,{...current,status:active,change:true});
+  const verified=await freshProduct(env,sku);
+  const normalized=normalizeProduct(verified);
+  if(Boolean(normalized.active)!==active)throw Error("Status produk belum terkonfirmasi di Digiflazz. Jangan ulangi sebelum memeriksa produk.");
+  await env.DB.prepare("UPDATE products SET active=?,raw=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(active?1:0,JSON.stringify(verified),sku).run();
+  await log(env,"INFO","product-status","Produk "+(active?"diaktifkan":"dinonaktifkan")+" langsung di Digiflazz.",sku);
+  return {ok:true,sku,active,verified:true};
+}
+async function deleteBuyerProduct(env,sku) {
+  sku=str(sku);
+  await ensureNoPendingProductOperation(env,sku);
+  const current=await freshProduct(env,sku);
+  await remoteProductDelete(env,current.id);
+  const after=await findProductBySku(env,sku);
+  if(after&&String(after.id)===String(current.id))throw Error("Penghapusan belum terkonfirmasi di Digiflazz. Jangan ulangi sebelum memeriksa produk.");
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM seller_options WHERE sku=?").bind(sku),
+    env.DB.prepare("DELETE FROM product_locks WHERE buyer_sku_code=?").bind(sku),
+    env.DB.prepare("DELETE FROM zone_assignments WHERE sku=?").bind(sku),
+    env.DB.prepare("DELETE FROM switch_operations WHERE sku=?").bind(sku),
+    env.DB.prepare("DELETE FROM seller_rules WHERE scope_type='product' AND scope_value=?").bind(sku),
+    env.DB.prepare("DELETE FROM products WHERE sku=?").bind(sku)
+  ]);
+  await log(env,"WARN","product-delete","Produk dihapus langsung dari Digiflazz.",sku);
+  return {ok:true,sku,deleted:true,verified:true};
 }
 function serviceCode(game,product) {
   const name=str(game).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
@@ -700,6 +788,21 @@ async function api(req, env, url) {
       const body=await getJson(req);
       return reply(await updateMaxPrice(env,decodeURIComponent(maxPrice[1]),Number(body.maxPrice)));
     }
+    const skuEdit=path.match(/^\/api\/products\/([^/]+)\/sku$/);
+    if(method==="POST"&&skuEdit) {
+      const body=await getJson(req);
+      return reply(await updateBuyerSku(env,decodeURIComponent(skuEdit[1]),body.sku));
+    }
+    const statusEdit=path.match(/^\/api\/products\/([^/]+)\/status$/);
+    if(method==="POST"&&statusEdit) {
+      const body=await getJson(req);
+      if(!Object.prototype.hasOwnProperty.call(body,"active"))throw Error("Status aktif wajib dikirim.");
+      return reply(await setBuyerProductStatus(env,decodeURIComponent(statusEdit[1]),bool(body.active)));
+    }
+    const productDelete=path.match(/^\/api\/products\/([^/]+)$/);
+    if(method==="DELETE"&&productDelete) {
+      return reply(await deleteBuyerProduct(env,decodeURIComponent(productDelete[1])));
+    }
     const pending=path.match(/^\/api\/products\/([^/]+)\/reconcile$/);
     if(method==="POST"&&pending)return reply(await reconcile(env,decodeURIComponent(pending[1])));
     if(method==="GET"&&path==="/api/sellers") {
@@ -785,7 +888,7 @@ async function api(req, env, url) {
     return failure(error, /sesi|Digiflazz mengembalikan|format katalog|tidak mengembalikan/i.test(error.message)?502:400);
   }
 }
-export { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays };
+export { rank, normalizeProduct, validateSettings, changedProduct, serviceCode, inCutoffWindow, slaDays, validBuyerSku };
 export default {
   async fetch(req,env) {
     const url=new URL(req.url);
