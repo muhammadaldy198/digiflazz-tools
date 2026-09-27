@@ -845,12 +845,14 @@ async function updateBuyerSku(env,oldSku,newSku) {
   if(!verified||String(verified.id)!==String(current.id))throw Error("Perubahan SKU belum terkonfirmasi di Digiflazz. Jangan ulangi sebelum memeriksa produk.");
   const normalized=normalizeProduct(verified);
   await env.DB.batch([
-    env.DB.prepare("UPDATE products SET sku=?,raw=?,active=?,seller_active=?,price=?,max_price=?,stock=?,unlimited_stock=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(newSku,JSON.stringify(verified),normalized.active,normalized.seller_active,normalized.price,normalized.max_price,normalized.stock,normalized.unlimited_stock,oldSku),
+    env.DB.prepare("DELETE FROM product_attention WHERE sku=?").bind(oldSku),
+    env.DB.prepare("UPDATE products SET sku=?,raw=?,active=?,seller_active=?,price=?,max_price=?,stock=?,unlimited_stock=?,nominal_value=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(newSku,JSON.stringify(verified),normalized.active,normalized.seller_active,normalized.price,normalized.max_price,normalized.stock,normalized.unlimited_stock,Number.isFinite(productNominalValue(normalized))?productNominalValue(normalized):null,oldSku),
     env.DB.prepare("UPDATE seller_options SET sku=? WHERE sku=?").bind(newSku,oldSku),
     env.DB.prepare("UPDATE product_locks SET buyer_sku_code=? WHERE buyer_sku_code=?").bind(newSku,oldSku),
     env.DB.prepare("UPDATE zone_assignments SET sku=? WHERE sku=?").bind(newSku,oldSku),
     env.DB.prepare("UPDATE switch_operations SET sku=? WHERE sku=?").bind(newSku,oldSku),
-    env.DB.prepare("UPDATE seller_rules SET scope_value=? WHERE scope_type='product' AND scope_value=?").bind(newSku,oldSku)
+    env.DB.prepare("UPDATE seller_rules SET scope_value=? WHERE scope_type='product' AND scope_value=?").bind(newSku,oldSku),
+    env.DB.prepare("INSERT OR REPLACE INTO product_attention(sku,dirty,updated_at) VALUES(?,1,CURRENT_TIMESTAMP)").bind(newSku)
   ]);
   await log(env,"INFO","product-sku","SKU Digiflazz diubah: "+oldSku+" → "+newSku,newSku);
   return {ok:true,oldSku,sku:newSku,verified:true};
@@ -864,6 +866,7 @@ async function setBuyerProductStatus(env,sku,active) {
   const normalized=normalizeProduct(verified);
   if(Boolean(normalized.active)!==active)throw Error("Status produk belum terkonfirmasi di Digiflazz. Jangan ulangi sebelum memeriksa produk.");
   await env.DB.prepare("UPDATE products SET active=?,raw=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(active?1:0,JSON.stringify(verified),sku).run();
+  await markAttentionDirty(env,[sku]);
   await log(env,"INFO","product-status","Produk "+(active?"diaktifkan":"dinonaktifkan")+" langsung di Digiflazz.",sku);
   return {ok:true,sku,active,verified:true};
 }
@@ -875,6 +878,7 @@ async function deleteBuyerProduct(env,sku) {
   const after=await findProductBySku(env,sku);
   if(after&&String(after.id)===String(current.id))throw Error("Penghapusan belum terkonfirmasi di Digiflazz. Jangan ulangi sebelum memeriksa produk.");
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM product_attention WHERE sku=?").bind(sku),
     env.DB.prepare("DELETE FROM seller_options WHERE sku=?").bind(sku),
     env.DB.prepare("DELETE FROM product_locks WHERE buyer_sku_code=?").bind(sku),
     env.DB.prepare("DELETE FROM zone_assignments WHERE sku=?").bind(sku),
@@ -940,10 +944,15 @@ async function switchSeller(env, sku, sellerId, reason, preparedSelection = null
     await remoteSave(env,changedProduct(current,choice,config.preserveMaxPrice && !config.autoFillMaxPrice,config.maxPriceOffset,config.preserveMaxPrice && config.autoFillMaxPrice));
     const verified=await freshProduct(env,sku);
     if (String(verified.seller_sku_id)!==sellerId) throw Error("Respons simpan diterima, tetapi seller baru belum terkonfirmasi.");
+    const normalizedVerified=normalizeProduct(verified);
     await env.DB.batch([
       env.DB.prepare("UPDATE switch_history SET status='success' WHERE id=?").bind(record.meta.last_row_id),
-      env.DB.prepare("UPDATE switch_operations SET status='success' WHERE sku=?").bind(sku)
+      env.DB.prepare("UPDATE switch_operations SET status='success' WHERE sku=?").bind(sku),
+      env.DB.prepare("UPDATE products SET seller_id=?,seller_name=?,price=?,max_price=?,seller_active=?,stock=?,unlimited_stock=?,raw=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(
+        normalizedVerified.seller_id,normalizedVerified.seller_name,normalizedVerified.price,normalizedVerified.max_price,normalizedVerified.seller_active,normalizedVerified.stock,normalizedVerified.unlimited_stock,JSON.stringify(verified),sku
+      )
     ]);
+    await markAttentionDirty(env,[sku]);
     await log(env,"INFO","switch","Seller dipindahkan dan dikonfirmasi di Digiflazz: "+candidate.seller_name,sku);
     return {ok:true,sku,seller:candidate.seller_name,price:candidate.price,verified:true};
   } catch(error) {
@@ -1025,11 +1034,16 @@ async function updateMaxPrice(env,sku,amount) {
     await remoteSave(env,{...fresh,max_price:amount,change:true});
     const verified=await freshProduct(env,sku);
     if(Number(verified.max_price)!==amount) throw Error("Harga maksimum belum terkonfirmasi di Digiflazz.");
-    await env.DB.prepare("UPDATE switch_operations SET status='success' WHERE sku=?").bind(sku).run();
+    await env.DB.batch([
+      env.DB.prepare("UPDATE switch_operations SET status='success' WHERE sku=?").bind(sku),
+      env.DB.prepare("UPDATE products SET max_price=?,raw=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(amount,JSON.stringify(verified),sku)
+    ]);
+    await markAttentionDirty(env,[sku]);
     await log(env,"INFO","max-price","Harga maksimum tersimpan: Rp"+amount,sku);
     return {ok:true,maxPrice:amount,verified:true};
   } catch(error) {
     await env.DB.prepare("UPDATE switch_operations SET status='unknown' WHERE sku=?").bind(sku).run();
+    await markAttentionDirty(env,[sku]);
     await log(env,"ERROR","max-price",error.message+" Tidak diulang otomatis.",sku);
     throw error;
   }
@@ -1045,6 +1059,7 @@ async function reconcile(env,sku) {
   const status=confirmed?"success":"error";
   await env.DB.prepare("UPDATE switch_operations SET status=? WHERE sku=?").bind(status,sku).run();
   if(!op.target_seller_id.startsWith("max:")) await env.DB.prepare("UPDATE switch_history SET status=? WHERE id=(SELECT id FROM switch_history WHERE buyer_sku_code=? AND status IN ('pending','unknown') ORDER BY id DESC LIMIT 1)").bind(status,sku).run();
+  await markAttentionDirty(env,[sku]);
   await log(env,confirmed?"INFO":"WARN","reconcile",confirmed?"Perubahan terkonfirmasi di Digiflazz.":"Target tidak ditemukan pada data terbaru; periksa sebelum mengulang.",sku);
   return {ok:true,confirmed,status};
 }
