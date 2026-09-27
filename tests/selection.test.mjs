@@ -494,3 +494,21 @@ test("backend defaults no longer contain a global seller price cap",()=>{
   const defaultsBlock=source.slice(source.indexOf("const DEFAULTS"),source.indexOf("const secureHeaders"));
   assert.doesNotMatch(defaultsBlock,/priceCap/);
 });
+
+
+test("event API filters level kind SKU and message server-side",()=>{
+  assert.match(source,/url\.searchParams\.get\("level"\)/);
+  assert.match(source,/AND level=\?/);
+  assert.match(source,/AND kind=\?/);
+  assert.match(source,/AND sku LIKE \?/);
+  assert.match(source,/AND message LIKE \?/);
+  assert.match(source,/SELECT DISTINCT kind FROM events/);
+});
+
+test("history API filters seller switches by SKU status and reason",()=>{
+  assert.match(source,/url\.searchParams\.get\("reason"\)/);
+  assert.match(source,/switchWhere\+=" AND buyer_sku_code LIKE \?"/);
+  assert.match(source,/switchWhere\+=" AND status=\?"/);
+  assert.match(source,/switchWhere\+=" AND reason=\?"/);
+  assert.match(source,/reason,status,created_at FROM switch_history/);
+});
