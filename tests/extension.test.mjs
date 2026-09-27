@@ -6,7 +6,7 @@ import { runInNewContext } from "node:vm";
 const source=readFileSync(new URL("../extension/digi-select.user.js",import.meta.url),"utf8");
 const module={exports:{}};
 runInNewContext(source,{module,setTimeout});
-const {chooseSeller,patch,serviceCode,maxPriceForSeller,slaDays,reviewValue}=module.exports;
+const {chooseSeller,patch,serviceCode,slaDays,reviewValue}=module.exports;
 const product={id:123,seller_sku_id:"current",max_price:12000};
 const candidate=(id,seller,price,rating=4.8,review="40+",sla="H+0",connectionType="ip")=>({id,seller,price,reviewAvg:rating,rating_qty:review,stock:10,unlimited_stock:0,status_sellerSku:1,connectionType,seller_details:{sla}});
 
@@ -58,12 +58,6 @@ test("codes use game initials and denomination without random characters",()=>{
   assert.equal(serviceCode("Mobile Legends","Weekly Pass"),null);
 });
 
-test("one global rupiah addition is applied to any seller price",()=>{
-  assert.equal(maxPriceForSeller(15000,1000),16000);
-  assert.equal(maxPriceForSeller(40000,1000),41000);
-  assert.equal(maxPriceForSeller(15000,-1),null);
-});
-
 test("observes Digiflazz seller dialog without replacing its native button handler",()=>{
   const selected=candidate("better","Better",9500);
   let called=null,saved=false;
@@ -81,13 +75,13 @@ test("observes Digiflazz seller dialog without replacing its native button handl
   assert.equal(called?.id,"better");
   assert.equal(saved,false);
   assert.equal(component.autoUpdateMaxPrice,false);
-  assert.equal(component.currentEditted.max_price,9500);
+  assert.equal(component.currentEditted.max_price,12000);
 });
 
 test("Firefox Android userscript uses forced content-context injection and visible panel",()=>{
   assert.match(source,/\/\/ @inject-into\s+content/);
   assert.match(source,/\/\/ @run-at\s+document-end/);
-  assert.match(source,/Auto Seller v1\.7 aktif/);
+  assert.match(source,/Auto Seller v1\.8 aktif/);
   assert.match(source,/wrappedJSObject/);
 });
 
@@ -143,4 +137,11 @@ test("userscript review tie-break understands approximate counts",()=>{
 test("userscript panel exposes configurable price tolerance",()=>{
   assert.match(source,/id="tolerance"/);
   assert.match(source,/priceTolerancePercent:2/);
+});
+
+
+test("userscript has no global Max Price controls or calculation",()=>{
+  assert.doesNotMatch(source,/autoFillMaxPrice|maxPriceOffset|maxPriceForSeller/);
+  assert.doesNotMatch(source,/id="fill"|id="offset"/);
+  assert.match(source,/Max Price tidak diubah oleh skrip/);
 });
