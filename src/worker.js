@@ -1328,6 +1328,9 @@ export default {
         return;
       }
 
+      // Recompute only dirty materialized attention rows; overview/product pages never fan out across all sellers.
+      await refreshAttentionCache(env,cfg,null,100);
+
       if(liveAuto) {
         try {
           const summary=await autoSwitchBatch(env,cfg.autoSwitchBatchSize);
