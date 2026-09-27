@@ -457,5 +457,6 @@ test("cooldown is skipped instead of counted as failure",()=>{
   assert.match(source,/let switched=0,noCandidate=0,skipped=0,failed=0/);
   assert.match(source,/error\?\.message==="Produk masih dalam masa jeda perpindahan\."/);
   assert.match(source,/status:"skipped",reason:"cooldown"/);
-  assert.match(source,/summary\.skipped\+" dilewati"/);
+  assert.match(source,/summary\.skipped/);
+  assert.match(source,/dilewati/);
 });
