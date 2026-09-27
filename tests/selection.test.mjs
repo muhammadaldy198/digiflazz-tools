@@ -271,10 +271,11 @@ test("inactive products are not treated as operational attention unless an opera
   assert.deepEqual(attentionReasons({active:0,operation_status:"pending"},{minRating:4}),["Operasi masih pending"]);
 });
 
-test("overview product filter and auto-switch share the unified attention source",()=>{
-  assert.match(source,/async function loadAttentionRows/);
-  assert.match(source,/const attention=await loadAttentionRows\(env,cfg,"WHERE p\.active=1"\)/);
-  assert.match(source,/if\(status==="issues"\)filtered=filtered\.filter\(x=>x\.needs_attention\)/);
+test("overview product filter and auto-switch share the materialized attention source",()=>{
+  assert.match(source,/async function attentionSummary/);
+  assert.match(source,/FROM product_attention a\s+JOIN products p ON p\.sku=a\.sku/);
+  assert.match(source,/status==="issues"\)where\+=" AND a\.dirty=0 AND a\.needs_attention=1"/);
+  assert.doesNotMatch(source,/const attention=await loadAttentionRows\(env,cfg,"WHERE p\.active=1"\)/);
 });
 
 
@@ -297,11 +298,12 @@ test("attention quality refresh batch is configurable and bounded",()=>{
   assert.match(source,/attentionRefreshBatchSize:\s*5/);
 });
 
-test("full scans rotate the oldest rating and SLA coverage without mixing it into auto-switch",()=>{
+test("full scans rotate rating SLA coverage and update only materialized cache batches",()=>{
   assert.match(source,/async function refreshAttentionCoverage/);
   assert.match(source,/ORDER BY CASE WHEN max\(o\.last_seen\) IS NULL THEN 0 ELSE 1 END ASC,max\(o\.last_seen\) ASC/);
   assert.match(source,/const qualityRefresh=await refreshAttentionCoverage\(env,cfg\.attentionRefreshBatchSize\)/);
-  assert.match(source,/qualityKnown=attention\.filter/);
+  assert.match(source,/const cacheRefresh=await refreshAttentionCache\(env,cfg,null,100\)/);
+  assert.match(source,/attentionSummary\(env\)/);
 });
 
 
@@ -343,10 +345,13 @@ test("product-specific rule wins over broader rule for attention ranking",()=>{
   assert.equal(matchingRuleForProduct(product,rules).id,3);
 });
 
-test("product API sorts before pagination and supports active inactive filters",()=>{
-  assert.match(source,/filtered=\[\.\.\.filtered\]\.sort\(productSortCompare\)/);
+test("product API paginates in SQL by brand and nominal and supports active inactive filters",()=>{
+  assert.match(source,/ORDER BY p\.brand COLLATE NOCASE ASC/);
+  assert.match(source,/p\.nominal_value ASC/);
+  assert.match(source,/LIMIT 50 OFFSET \?/);
   assert.match(source,/status==="active"/);
   assert.match(source,/status==="inactive"/);
+  assert.doesNotMatch(source,/filtered=\[\.\.\.filtered\]\.sort\(productSortCompare\)/);
 });
 
 
@@ -354,4 +359,34 @@ test("attention queries chunk large SKU lists below D1 SQL variable limits",()=>
   assert.match(source,/for\(let i=0;i<skus\.length;i\+=75\)chunks\.push\(skus\.slice\(i,i\+75\)\)/);
   assert.match(source,/const batch=await env\.DB\.batch\(/);
   assert.doesNotMatch(source,/const placeholders=skus\.map\(\(\)=>"\?"\)\.join\(","\)/);
+});
+
+
+test("materialized attention cache avoids full seller fanout on overview",()=>{
+  assert.match(source,/CREATE|product_attention/);
+  assert.match(source,/async function persistAttentionRows/);
+  assert.match(source,/async function markAttentionDirty/);
+  assert.match(source,/async function refreshAttentionCache/);
+  assert.match(source,/async function attentionSummary/);
+  assert.match(source,/conn\(env\),attentionSummary\(env\)/);
+});
+
+test("auto-switch reads only fresh cached attention targets",()=>{
+  assert.match(source,/WHERE a\.dirty=0 AND a\.needs_attention=1 AND p\.active=1/);
+  assert.match(source,/COALESCE\(op\.status,''\) NOT IN \('pending','unknown'\)/);
+});
+
+test("rule preference zone and settings changes invalidate materialized attention",()=>{
+  assert.ok((source.match(/await markAttentionDirty\(env\);/g)||[]).length>=5);
+  assert.match(source,/await markAttentionDirty\(env,\[str\(b\.sku\)\]\)/);
+});
+
+test("product mutations dirty or remove the corresponding attention cache",()=>{
+  assert.match(source,/DELETE FROM product_attention WHERE sku=\?/);
+  assert.match(source,/INSERT OR REPLACE INTO product_attention\(sku,dirty,updated_at\)/);
+  assert.match(source,/await markAttentionDirty\(env,\[sku\]\)/);
+});
+
+test("cron drains dirty materialized attention incrementally",()=>{
+  assert.match(source,/await refreshAttentionCache\(env,cfg,null,100\)/);
 });
