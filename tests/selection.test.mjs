@@ -659,3 +659,31 @@ test("legacy global seller rules are ignored",()=>{
   const rules=[{id:1,is_active:1,scope_type:"global",scope_value:"",min_rating:5}];
   assert.equal(matchingRuleForProduct(product,rules),null);
 });
+
+
+test("seller option refresh replaces stale cached options for a SKU",()=>{
+  const block=source.slice(source.indexOf("async function refreshOptions"),source.indexOf("async function refreshAttentionCoverage"));
+  assert.match(block,/DELETE FROM seller_options WHERE sku=\?/);
+  assert.ok(block.indexOf("DELETE FROM seller_options WHERE sku=?") < block.indexOf("for (let i=0;i<cmds.length"));
+});
+
+test("empty seller-option results back off for six hours",()=>{
+  const block=source.slice(source.indexOf("async function refreshAttentionCoverage"),source.indexOf("async function rankedOptions"));
+  assert.match(block,/LEFT JOIN quality_refresh_state q ON q\.sku=p\.sku/);
+  assert.match(block,/q\.next_retry_at IS NULL OR q\.next_retry_at<=CURRENT_TIMESTAMP/);
+  assert.match(block,/last_result='empty'/);
+  assert.match(block,/datetime\('now','\+6 hours'\)/);
+  assert.match(block,/tidak punya kandidat seller; dicoba lagi setelah 6 jam/);
+});
+
+test("seller quality refresh errors receive a short retry backoff",()=>{
+  const block=source.slice(source.indexOf("async function refreshAttentionCoverage"),source.indexOf("async function rankedOptions"));
+  assert.match(block,/last_result='error'/);
+  assert.match(block,/datetime\('now','\+30 minutes'\)/);
+});
+
+test("empty seller refreshes still invalidate attention for recalculation",()=>{
+  const block=source.slice(source.indexOf("async function refreshAttentionCoverage"),source.indexOf("async function rankedOptions"));
+  assert.match(block,/refreshedSkus\.push\(row\.sku\)/);
+  assert.match(block,/return \{refreshed,empty,failed,skus:refreshedSkus\}/);
+});
