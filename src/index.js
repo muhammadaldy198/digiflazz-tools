@@ -500,7 +500,8 @@ function attentionReasons(product, config, now=new Date(), context=null) {
   if(!Number(product.active))return reasons;
   if(!str(product.seller_name))reasons.push("Seller belum dipilih");
   else if(Number(product.seller_active)===0)reasons.push("Seller OFF");
-  if(Number(product.max_price)>0&&Number(product.price)>Number(product.max_price))reasons.push("Harga di atas max price");
+  if(Number(product.max_price)<=0)reasons.push("Max Price belum diisi");
+  else if(Number(product.price)>Number(product.max_price))reasons.push("Harga di atas max price");
   if(product.stock!=null&&!Number(product.unlimited_stock)&&Number(product.stock)<=0)reasons.push("Stok habis");
   if(inCutoffWindow(product.start_cut_off,product.end_cut_off,now))reasons.push("Sedang cut-off");
   if(Number(product.option_count)>0) {
@@ -530,7 +531,7 @@ function attentionReasons(product, config, now=new Date(), context=null) {
   return [...new Set(reasons)];
 }
 function attentionCategory(reason) {
-  if(/Harga/i.test(reason))return "harga";
+  if(/Harga|Max Price/i.test(reason))return "harga";
   if(/Rating|SLA/i.test(reason))return "kualitas";
   if(/Operasi|hasil operasi/i.test(reason))return "tertunda";
   return "operasional";
@@ -967,6 +968,7 @@ async function autoSwitchBatch(env, requestedLimit) {
     LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku
     LEFT JOIN switch_operations op ON op.sku=p.sku
     WHERE a.dirty=0 AND a.needs_attention=1 AND p.active=1
+      AND p.max_price>0
       AND l.buyer_sku_code IS NULL
       AND COALESCE(op.status,'') NOT IN ('pending','unknown')
     ORDER BY p.last_seen ASC,p.sku ASC LIMIT ?`).bind(limit).all();

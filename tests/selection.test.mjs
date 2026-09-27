@@ -434,3 +434,11 @@ test("removed global Max Price settings are absent from defaults",()=>{
   const defaultsBlock=source.slice(source.indexOf("const DEFAULTS"),source.indexOf("const secureHeaders"));
   assert.doesNotMatch(defaultsBlock,/maxPriceOffset|autoFillMaxPrice|preserveMaxPrice/);
 });
+
+
+test("missing product Max Price is flagged and excluded from Auto Switch targets",()=>{
+  const reasons=attentionReasons({active:1,seller_name:"Current",seller_active:1,price:10000,max_price:0,stock:10,unlimited_stock:0,option_count:0},{minRating:4},new Date());
+  assert.ok(reasons.includes("Max Price belum diisi"));
+  assert.match(source,/AND p\.max_price>0/);
+  assert.match(source,/Harga\|Max Price/);
+});
