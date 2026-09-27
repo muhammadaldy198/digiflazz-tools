@@ -705,6 +705,7 @@ async function attentionSummary(env) {
     env.DB.prepare(`SELECT
       count(*) products,
       sum(CASE WHEN p.active=1 THEN 1 ELSE 0 END) activeProducts,
+      sum(CASE WHEN p.max_price<=0 THEN 1 ELSE 0 END) missingMaxPrice,
       sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 THEN 1 ELSE 0 END) issues,
       sum(CASE WHEN a.dirty=0 AND a.operational_issue=1 THEN 1 ELSE 0 END) operational,
       sum(CASE WHEN a.dirty=0 AND a.quality_issue=1 THEN 1 ELSE 0 END) quality,
@@ -718,6 +719,7 @@ async function attentionSummary(env) {
   return {
     products:Number(summary?.products)||0,
     activeProducts:Number(summary?.activeProducts)||0,
+    missingMaxPrice:Number(summary?.missingMaxPrice)||0,
     issues:Number(summary?.issues)||0,
     qualityKnown:Number(quality?.total)||0,
     attentionFresh:Number(summary?.attentionFresh)||0,
@@ -977,7 +979,7 @@ async function autoSwitchBatch(env, requestedLimit) {
     try { attention_reasons=JSON.parse(row.reasons_json||"[]"); } catch {}
     return {...row,attention_reasons};
   });
-  let switched=0,noCandidate=0,failed=0;
+  let switched=0,noCandidate=0,skipped=0,failed=0;
   const results=[];
   for(const target of targets) {
     const sku=target.sku;
@@ -1004,13 +1006,19 @@ async function autoSwitchBatch(env, requestedLimit) {
       results.push({sku,status:"switched",seller:changed.seller,price:changed.price});
       await refreshAttentionCache(env,cfg,[sku],1);
     } catch(error) {
+      if(error?.message==="Produk masih dalam masa jeda perpindahan.") {
+        skipped++;
+        await log(env,"INFO","auto-switch","Dilewati: produk masih dalam masa jeda perpindahan.",sku);
+        results.push({sku,status:"skipped",reason:"cooldown"});
+        continue;
+      }
       failed++;
       await log(env,"WARN","auto-switch",error.message,sku);
       results.push({sku,status:"error",error:error.message});
       await markAttentionDirty(env,[sku]);
     }
   }
-  return {ok:true,examined:targets.length,switched,noCandidate,failed,remainingPossible:targets.length===limit,results};
+  return {ok:true,examined:targets.length,switched,noCandidate,skipped,failed,remainingPossible:targets.length===limit,results};
 }
 
 async function updateMaxPrice(env,sku,amount) {
@@ -1146,6 +1154,7 @@ async function api(req, env, url) {
       if(category){where+=" AND p.category=?";args.push(category)}
       if(brand){where+=" AND p.brand=?";args.push(brand)}
       if(status==="issues")where+=" AND a.dirty=0 AND a.needs_attention=1";
+      else if(status==="missing-max")where+=" AND p.max_price<=0";
       else if(status==="locked")where+=" AND l.buyer_sku_code IS NOT NULL";
       else if(status==="active")where+=" AND p.active=1";
       else if(status==="inactive")where+=" AND p.active=0";
@@ -1351,7 +1360,7 @@ export default {
       if(liveAuto) {
         try {
           const summary=await autoSwitchBatch(env,cfg.autoSwitchBatchSize);
-          if(summary.examined) await log(env,"INFO","auto-switch","Batch otomatis: "+summary.switched+" pindah, "+summary.noCandidate+" tanpa kandidat, "+summary.failed+" gagal.");
+          if(summary.examined) await log(env,"INFO","auto-switch","Batch otomatis: "+summary.switched+" pindah, "+summary.noCandidate+" tanpa kandidat, "+summary.skipped+" dilewati, "+summary.failed+" gagal.");
         } catch(error) { await log(env,"WARN","auto-switch",error.message); }
         return;
       }
