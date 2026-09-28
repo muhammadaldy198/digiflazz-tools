@@ -124,7 +124,7 @@ test("never monkeypatches fetchSellers",()=>{
 test("userscript uses unknown SLA only as a last-resort fallback",()=>{
   const options=[
     candidate("unknown","Unknown",7000,5,"100+","maks penerimaan komplain H+7","api"),
-    candidate("known","Known",9000,4.2,"100+","SLA H+2, maks komplain H+7","ip")
+    candidate("known","Known",9000,4.8,"100+","SLA H+2, maks komplain H+7","ip")
   ];
   assert.equal(chooseSeller(options,product,{minRating:4}).id,"known");
 });
@@ -132,7 +132,7 @@ test("userscript uses unknown SLA only as a last-resort fallback",()=>{
 test("userscript chooses cheapest when every eligible SLA is unknown",()=>{
   const options=[
     candidate("u2","Unknown 2",9000,4.5,"100+","","ip"),
-    candidate("u1","Unknown 1",8000,4.1,"100+","maks penerimaan komplain H+7","api")
+    candidate("u1","Unknown 1",8000,4.6,"100+","maks penerimaan komplain H+7","api")
   ];
   assert.equal(chooseSeller(options,product,{minRating:4}).id,"u1");
 });
