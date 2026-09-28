@@ -562,8 +562,8 @@ function attentionActionState(row,config) {
   if(row.best_candidate_seller&&lastMs&&Date.now()-lastMs<cooldownMs)return "cooldown";
   if(row.best_candidate_seller)return "actionable";
   const reasons=Array.isArray(row.attention_reasons)?row.attention_reasons:[];
-  if(reasons.some(x=>/Kandidat lolos aturan tetapi di atas Max Price/i.test(x)))return "max-price";
   if(hasCurrentSellerIssue(reasons))return "current-seller";
+  if(reasons.some(x=>/Kandidat lolos aturan tetapi di atas Max Price/i.test(x)))return "max-price";
   return "no-candidate";
 }
 function attentionReasons(product, config, now=new Date(), context=null) {
@@ -827,14 +827,14 @@ async function attentionSummary(env, config) {
     env.DB.prepare("SELECT count(DISTINCT o.sku) total FROM seller_options o JOIN products p ON p.sku=o.sku WHERE p.active=1").first(),
     actionableAttentionCount(env,config),
     env.DB.prepare(`SELECT
-      sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json LIKE ? THEN 1 ELSE 0 END) maxPriceBlocked,
-      sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ? AND ${CURRENT_SELLER_ISSUE_SQL} THEN 1 ELSE 0 END) currentSellerIssue,
+      sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json LIKE ? AND NOT ${CURRENT_SELLER_ISSUE_SQL} THEN 1 ELSE 0 END) maxPriceBlocked,
+      sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND ${CURRENT_SELLER_ISSUE_SQL} THEN 1 ELSE 0 END) currentSellerIssue,
       sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ? AND NOT ${CURRENT_SELLER_ISSUE_SQL} THEN 1 ELSE 0 END) noCandidate,
       sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NOT NULL
         AND EXISTS(SELECT 1 FROM switch_history sh WHERE sh.buyer_sku_code=a.sku AND sh.status='success' AND sh.created_at>?)
         THEN 1 ELSE 0 END) cooldown
       FROM product_attention a JOIN products p ON p.sku=a.sku WHERE p.active=1`)
-      .bind(maxBlockPattern,maxBlockPattern,maxBlockPattern,autoSwitchCooldownCutoff(config)).first()
+      .bind(maxBlockPattern,maxBlockPattern,autoSwitchCooldownCutoff(config)).first()
   ]);
   return {
     products:Number(summary?.products)||0,
@@ -1280,12 +1280,11 @@ async function api(req, env, url) {
         args.push(cooldownCutoff);
       }
       else if(status==="blocked-max"){
-        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json LIKE ?";
+        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json LIKE ? AND NOT "+CURRENT_SELLER_ISSUE_SQL;
         args.push(maxBlockPattern);
       }
       else if(status==="current-issue"){
-        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ? AND "+CURRENT_SELLER_ISSUE_SQL;
-        args.push(maxBlockPattern);
+        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND "+CURRENT_SELLER_ISSUE_SQL;
       }
       else if(status==="no-candidate"){
         where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ? AND NOT "+CURRENT_SELLER_ISSUE_SQL;
