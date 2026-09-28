@@ -11,7 +11,7 @@ Dashboard pribadi untuk mengelola katalog dan Auto Switch seller Digiflazz di `h
 - Seller wajib lolos rating minimal, status aktif, stok, cut-off, zona, dan Max Price produk.
 - Urutan Auto Switch: **tier rating 4,5–5 → Seller Prioritas → SLA tercepat → toleransi harga → rating → jumlah ulasan → harga**. Rating 4,0–4,49 hanya dipakai bila tidak ada kandidat tier 4,5–5 yang lolos. Jenis koneksi IP/API/H2H tidak memengaruhi ranking.
 - Default production saat ini memakai rating minimal 4 dan toleransi harga 2%.
-- Seller dapat berstatus **Biasa**, **Prioritas**, atau **Blokir**. Prioritas hanya mendahulukan seller di dalam tier rating aktif dan tidak dapat melewati syarat rating minimum, stok, cut-off, Max Price, zona, atau blokir.
+- Seller dapat berstatus **Biasa**, **Prioritas**, atau **Blokir**. Prioritas hanya mendahulukan seller di dalam tier rating aktif dan tidak dapat melewati syarat rating minimum, stok, cut-off, Max Price, zona, atau blokir.\n- Menu **Penjual** menggabungkan kandidat berdasarkan ID seller Digiflazz, menampilkan rating/ulasan/cakupan produk dari `seller_options`, dan memakai nama lengkap bila pernah diekspos Digiflazz. Nama yang belum pernah diekspos tidak ditebak; UI memakai ID seller sementara.
 - Aturan khusus dapat diterapkan ke kategori, brand, tipe, atau SKU. Aturan khusus hanya mengubah rating minimal; proteksi stok dan cut-off tetap wajib.
 - Zona memakai pola deskripsi seller dan assignment SKU. Product ID tidak diperlukan.
 - Auto Switch hanya memasukkan SKU yang benar-benar punya kandidat pengganti yang memenuhi semua aturan. Produk bermasalah tanpa kandidat tetap muncul di **Perlu perhatian** tetapi tidak menghabiskan batch otomatis.
