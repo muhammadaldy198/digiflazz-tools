@@ -163,10 +163,21 @@ test("when all eligible sellers have unknown SLA, choose the cheapest",()=>{
 });
 
 
-test("cron separates full scan from live auto-switch and reuses refreshed seller selection",()=>{
-  assert.match(source,/if\(cfg\.scanEnabled && age>=scanCadence\)\s*\{\s*await scan\(env,"cron"\);\s*return;/);
+test("cron runs scan and Auto Switch on separate hourly schedules",()=>{
+  const scheduled=source.slice(source.indexOf("async scheduled(event,env)"),source.lastIndexOf("}};"));
+  assert.match(scheduled,/event\?\.cron==="0 \* \* \* \*"/);
+  assert.match(scheduled,/event\?\.cron==="30 \* \* \* \*"/);
+  assert.match(scheduled,/scanCadence=Math\.max\(60,Number\(cfg\.scanIntervalMinutes\)\|\|60\)\*60000/);
+  assert.match(scheduled,/await refreshAttentionCache\(env,cfg,null,100\)/);
+  assert.match(scheduled,/await autoSwitchBatch\(env,cfg\.autoSwitchBatchSize\)/);
   assert.match(source,/switchSeller\(env,sku,best\.seller_id,"auto",selection\)/);
   assert.match(source,/preparedSelection \|\| await rankedOptions\(env,sku\)/);
+});
+
+test("scan interval has a hard hourly minimum",()=>{
+  assert.match(source,/scanEnabled: false, dryRun: true, autoSwitch: false, scanIntervalMinutes: 60/);
+  assert.match(source,/scanIntervalMinutes:\[60,1440\]/);
+  assert.match(source,/values\.scanIntervalMinutes=Math\.max\(60,Number\(values\.scanIntervalMinutes\)\|\|60\)/);
 });
 
 test("Digiflazz seller-directory 403 is backed off instead of treated as a dead session",()=>{
@@ -560,7 +571,7 @@ test("deprecated price-only monitoring settings are removed from production defa
 });
 
 test("settings validation exposes real batch and cooldown controls",()=>{
-  const current={cooldownHours:24,autoSwitchBatchSize:5,scanIntervalMinutes:5,minRating:4,minReviews:0,attentionRefreshBatchSize:5,priceTolerancePercent:2,saveMode:"manual",scanEnabled:true,dryRun:false,autoSwitch:true};
+  const current={cooldownHours:24,autoSwitchBatchSize:5,scanIntervalMinutes:60,minRating:4,minReviews:0,attentionRefreshBatchSize:5,priceTolerancePercent:2,saveMode:"manual",scanEnabled:true,dryRun:false,autoSwitch:true};
   const next=validateSettings({cooldownHours:12,autoSwitchBatchSize:7,proactiveScan:true,minSavingsPercent:50,reoptimizeHours:4,weights:{price:100}},current);
   assert.equal(next.cooldownHours,12);
   assert.equal(next.autoSwitchBatchSize,7);
