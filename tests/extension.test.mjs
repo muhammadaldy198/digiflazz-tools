@@ -6,13 +6,18 @@ import { runInNewContext } from "node:vm";
 const source=readFileSync(new URL("../extension/digi-select.user.js",import.meta.url),"utf8");
 const module={exports:{}};
 runInNewContext(source,{module,setTimeout});
-const {chooseSeller,patch,serviceCode,slaDays,reviewValue}=module.exports;
+const {chooseSeller,patch,serviceCode,slaDays,reviewValue,inCutoffWindow}=module.exports;
 const product={id:123,seller_sku_id:"current",max_price:12000};
 const candidate=(id,seller,price,rating=4.8,review="40+",sla="H+0",connectionType="ip")=>({id,seller,price,reviewAvg:rating,rating_qty:review,stock:10,unlimited_stock:0,status_sellerSku:1,connectionType,seller_details:{sla}});
 
-test("picks an eligible seller directly for the selected Digiflazz product",()=>{
+test("keeps the current seller when it is already the best eligible choice",()=>{
   const options=[candidate("current","Existing",8900),candidate("high","High",13000),candidate("low","Low",9900),candidate("bad","Bad",9800,3.0)];
-  assert.equal(chooseSeller(options,product,{minRating:4}).id,"low");
+  assert.equal(chooseSeller(options,product,{minRating:4}).id,"current");
+});
+
+test("picks a replacement when another eligible seller ranks higher",()=>{
+  const options=[candidate("current","Existing",9900,4.1,"40+","H+1"),candidate("better","Better",10000,4.8,"100+","H+0")];
+  assert.equal(chooseSeller(options,product,{minRating:4}).id,"better");
 });
 
 test("rejects blocked, inactive, unrated, and under reviewed alternatives",()=>{
@@ -25,6 +30,22 @@ test("never selects an expensive or out of stock seller",()=>{
   const empty=candidate("empty","Empty",9000);empty.stock=0;
   assert.equal(chooseSeller([empty,candidate("expensive","Expensive",12500)],product,{minRating:4}),null);
   assert.equal(chooseSeller([candidate("over","Over",12100)],product,{minRating:4}),null);
+});
+
+test("browser helper rejects sellers during Digiflazz cutoff windows",()=>{
+  const now="2026-09-28T03:30:00Z"; // 10:30 Asia/Jakarta
+  assert.equal(inCutoffWindow("10:00","11:00",new Date(now)),true);
+  assert.equal(inCutoffWindow("11:00","12:00",new Date(now)),false);
+  const cutoff=candidate("cutoff","Cutoff",8000,5,"100+","H+0");
+  cutoff.start_cut_off="10:00";cutoff.end_cut_off="11:00";
+  const healthy=candidate("healthy","Healthy",9000,4.5,"100+","H+0");
+  assert.equal(chooseSeller([cutoff,healthy],{...product,seller_sku_id:"none"},{minRating:4,now}).id,"healthy");
+});
+
+test("browser helper accepts seller status when Digiflazz omits status_sellerSku",()=>{
+  const option=candidate("nostatus","No Status",9000,4.8,"100+","H+0");
+  delete option.status_sellerSku;
+  assert.equal(chooseSeller([option],{...product,seller_sku_id:"none"},{minRating:4}).id,"nostatus");
 });
 
 test("seller priority is rating 4-5, then SLA, then cheapest price",()=>{
@@ -81,7 +102,7 @@ test("observes Digiflazz seller dialog without replacing its native button handl
 test("Firefox Android userscript uses forced content-context injection and visible panel",()=>{
   assert.match(source,/\/\/ @inject-into\s+content/);
   assert.match(source,/\/\/ @run-at\s+document-end/);
-  assert.match(source,/Auto Seller v2\.0 aktif/);
+  assert.match(source,/Auto Seller v2\.0\.1 aktif/);
   assert.match(source,/wrappedJSObject/);
 });
 

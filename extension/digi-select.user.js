@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Digi Tools — Auto Select Seller
 // @namespace    https://tools.lfamiliastore.my.id/
-// @version      2.0.0
+// @version      2.0.1
 // @description  Pilih seller langsung di halaman produk Digiflazz. Sesi tetap di browser.
 // @match        https://member.digiflazz.com/*
 // @match        https://tools.lfamiliastore.my.id/*
@@ -63,19 +63,29 @@
     const n=Number(match[0]);
     return raw.startsWith("<")?Math.max(0,n-1):n;
   }
+  function inCutoffWindow(start,end,now=new Date()) {
+    const clean=v=>/^([01]\d|2[0-3]):[0-5]\d$/.test(str(v))?str(v):null;
+    const a=clean(start),b=clean(end);
+    if(!a||!b||a===b)return false;
+    const clock=new Intl.DateTimeFormat("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"Asia/Jakarta"}).format(now);
+    return a<b ? clock>=a&&clock<b : clock>=a||clock<b;
+  }
   function chooseSeller(choices, product, options) {
     const cfg={...DEFAULTS,...options}, blocked=names(cfg.blocked);
     const cap=Number(product?.max_price)>0?Number(product.max_price):Infinity;
     const minRating=Math.max(4,Math.min(5,Number(cfg.minRating)||4));
     const tolerance=Math.max(0,Math.min(20,Number(cfg.priceTolerancePercent)||0));
+    const now=cfg.now?new Date(cfg.now):new Date();
     const valid=(Array.isArray(choices)?choices:[]).filter(x=>{
       const price=Number(x.price),rating=x.reviewAvg==null?null:Number(x.reviewAvg);
-      return x.id!=null && str(x.id)!==str(product?.seller_sku_id) &&
-        Number(x.status_sellerSku)===1 && Number.isFinite(price) && price>0 && price<=cap &&
+      const cutoff=inCutoffWindow(x.start_cut_off??x.seller_details?.start_cut_off,x.end_cut_off??x.seller_details?.end_cut_off,now);
+      return x.id!=null &&
+        (x.status_sellerSku==null || Number(x.status_sellerSku)===1) && Number.isFinite(price) && price>0 && price<=cap &&
         !blocked.has(str(x.seller).toLowerCase()) &&
         rating!=null && Number.isFinite(rating) && rating>=minRating &&
         reviewCount(x.rating_qty)>=Number(cfg.minReviews||0) &&
-        (Number(x.stock)>0 || Number(x.unlimited_stock)===1);
+        (Number(x.stock)>0 || Number(x.unlimited_stock)===1) &&
+        !cutoff;
     }).map(x=>({...x,_sla:slaDays(x.seller_details?.sla),_reviews:reviewValue(x.rating_qty)}));
     const cheapestBySla=new Map();
     for(const x of valid){
@@ -143,7 +153,8 @@
     const cfg=settings;
     if(!cfg.enabled || !product || !Array.isArray(vm.sellers))return;
     const candidate=chooseSeller(vm.sellers,product,cfg);
-    if(!candidate){update("Tidak ada seller yang lolos harga, rating, dan stok.");return}
+    if(!candidate){update("Tidak ada seller yang lolos harga, rating, stok, status, dan cut-off.");return}
+    if(str(candidate.id)===str(product.seller_sku_id)){update("Seller saat ini sudah menjadi kandidat terbaik; tidak diubah.");return}
     if(lastProduct===str(product.id) && lastSeller===str(candidate.id) && Date.now()-lastActionTime<3000)return;
     lastProduct=str(product.id);lastSeller=str(candidate.id);lastActionTime=Date.now();
     try {
@@ -314,7 +325,7 @@
       <label><input id="code" type="checkbox"> Isi SKU otomatis</label>
       <p>Mobile Legends 5 Diamond → ML5, Free Fire 1000 Diamond → FF1000. SKU manual tidak ditimpa.</p>
       <button id="fill-all-codes" type="button">⚡ Isi semua SKU di halaman</button>
-      <div id="status" class="status" role="status">Auto Seller v2.0 aktif. Aturan production dipakai untuk ranking.</div>
+      <div id="status" class="status" role="status">Auto Seller v2.0.1 aktif. Aturan production dipakai untuk ranking.</div>
     </div><button class="bubble" id="toggle" aria-label="Buka Auto Seller">⚡ Auto Seller</button>`;
     const get=id=>ui.getElementById(id);
     get("enabled").checked=settings.enabled;
@@ -349,7 +360,7 @@
     },true);
     setInterval(scanVue,900);
   }
-  if(testing) {module.exports={chooseSeller,reviewCount,patch,serviceCode,slaDays,reviewValue};return}
+  if(testing) {module.exports={chooseSeller,reviewCount,patch,serviceCode,slaDays,reviewValue,inCutoffWindow};return}
   try {
     if(typeof GM_registerMenuCommand==="function") GM_registerMenuCommand("Buka Auto Seller",()=>{
       panel();
