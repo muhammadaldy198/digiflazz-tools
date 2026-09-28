@@ -71,7 +71,7 @@ Production saat ini menggunakan:
 - cooldown: 24 jam
 - refresh rating/SLA: 10 SKU per full scan
 - min rating: 4
-- min reviews: 0
+- min reviews: 10
 - toleransi harga: 2%
 
 Nilai production disimpan di D1 dan dapat berubah melalui panel; daftar di atas adalah konfigurasi yang diverifikasi saat dokumentasi ini diperbarui.
