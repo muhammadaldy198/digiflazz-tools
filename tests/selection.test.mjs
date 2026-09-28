@@ -291,9 +291,11 @@ test("soft SLA attention cannot force a worse seller switch",()=>{
   assert.match(source,/const best=top&&String\(top\.seller_id\)!==currentId/);
 });
 
-test("attention option coverage uses one grouped count instead of a per-product correlated scan",()=>{
-  assert.match(source,/LEFT JOIN \(SELECT sku,count\(\*\) AS option_count FROM seller_options GROUP BY sku\) option_counts/);
-  assert.doesNotMatch(source,/SELECT count\(\*\) FROM seller_options all_options WHERE all_options\.sku=p\.sku/);
+test("attention refresh derives option counts from the already fetched SKU options",()=>{
+  const block=source.slice(source.indexOf("async function loadAttentionRows"),source.indexOf("function attentionBreakdown"));
+  assert.match(block,/const hydratedRow=\{\.\.\.row,option_count:options\.length\}/);
+  assert.doesNotMatch(block,/SELECT sku,count\(\*\) AS option_count FROM seller_options GROUP BY sku/);
+  assert.doesNotMatch(block,/SELECT count\(\*\) FROM seller_options all_options WHERE all_options\.sku=p\.sku/);
 });
 
 
@@ -304,13 +306,14 @@ test("attention quality refresh batch is configurable and bounded",()=>{
   assert.match(source,/attentionRefreshBatchSize:\s*5/);
 });
 
-test("full scans rotate rating SLA coverage and update only materialized cache batches",()=>{
-  assert.match(source,/async function refreshAttentionCoverage/);
-  assert.match(source,/ORDER BY CASE WHEN max\(o\.last_seen\) IS NULL THEN 0 ELSE 1 END ASC/);
-  assert.match(source,/COALESCE\(max\(o\.last_seen\),q\.last_attempt,'1970-01-01 00:00:00'\) ASC/);
+test("rating SLA refresh rotates by refresh state without scanning seller_options",()=>{
+  const block=source.slice(source.indexOf("async function refreshAttentionCoverage"),source.indexOf("async function rankedOptions"));
+  assert.match(block,/ORDER BY CASE WHEN q\.last_attempt IS NULL THEN 0 ELSE 1 END ASC/);
+  assert.match(block,/COALESCE\(q\.last_attempt,'1970-01-01 00:00:00'\) ASC/);
+  assert.doesNotMatch(block,/JOIN seller_options/);
+  assert.doesNotMatch(block,/max\(o\.last_seen\)/);
   assert.match(source,/const qualityRefresh=await refreshAttentionCoverage\(env,cfg\.attentionRefreshBatchSize,deadlineMs\)/);
   assert.match(source,/const cacheRefresh=await refreshAttentionCache\(env,cfg,null,100\)/);
-  assert.match(source,/attentionSummary\(env,cfg\)/);
 });
 
 
@@ -622,7 +625,7 @@ test("materialized and detail attention pass the effective specific rating rule"
 });
 
 test("materialized best candidate means an actual replacement seller",()=>{
-  assert.match(source,/replacement=ranked\.find\(x=>x\.eligible&&String\(x\.seller_id\)!==String\(row\.current_seller_sku_id\)\)/);
+  assert.match(source,/replacement=ranked\.find\(x=>x\.eligible&&String\(x\.seller_id\)!==String\(hydratedRow\.current_seller_sku_id\)\)/);
   assert.match(source,/best_candidate_seller:replacement\?\.seller_name/);
   assert.match(source,/best_candidate_price:replacement\?\.price/);
 });
@@ -711,9 +714,26 @@ test("seller ranking queries expose the stable seller account id from candidate 
   assert.match(source,/accountKey = str\(x\.seller_account_id\)/);
 });
 
-test("overview seller count comes from candidate seller identities",()=>{
-  assert.match(source,/count\(DISTINCT CASE WHEN json_extract\(o\.raw,'\$\.seller_id'\)/);
-  assert.doesNotMatch(source,/SELECT count\(\*\) total FROM sellers/);
+test("overview seller count uses the cached direct-directory count",()=>{
+  const block=source.slice(source.indexOf('if (method==="GET" && path==="/api/bootstrap")'),source.indexOf('if (method==="GET" && path==="/api/connection/status")'));
+  assert.match(block,/SELECT value FROM app_settings WHERE key='seller_directory_count'/);
+  assert.doesNotMatch(block,/count\(DISTINCT/);
+  assert.doesNotMatch(block,/seller_options/);
+  assert.match(source,/JSON\.stringify\(sellers\.length\)/);
+});
+
+test("overview quality coverage uses product_attention instead of seller_options",()=>{
+  const block=source.slice(source.indexOf("async function attentionSummary"),source.indexOf("async function refreshOptions"));
+  assert.match(block,/a\.option_count>0/);
+  assert.doesNotMatch(block,/count\(DISTINCT o\.sku\)/);
+  assert.doesNotMatch(block,/JOIN seller_options/);
+});
+
+test("product listing does not group the whole switch history table",()=>{
+  const block=source.slice(source.indexOf('if (method==="GET" && path==="/api/products")'),source.indexOf("const opt=path.match"));
+  assert.doesNotMatch(block,/SELECT buyer_sku_code,max\(created_at\).*GROUP BY buyer_sku_code/s);
+  assert.match(block,/SELECT sh\.created_at FROM switch_history sh WHERE sh\.buyer_sku_code=p\.sku AND sh\.status='success' ORDER BY sh\.created_at DESC LIMIT 1/);
+  assert.match(block,/EXISTS \(SELECT 1 FROM switch_history sh WHERE sh\.buyer_sku_code=p\.sku AND sh\.status='success' AND sh\.created_at>\?\)/);
 });
 
 test("ranking applies 4.5+ tier before fallback and Seller Prioritas inside the active tier",()=>{
