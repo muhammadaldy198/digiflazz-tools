@@ -36,3 +36,8 @@ if (!html.includes("Status Auto Switch")) throw Error("Product detail must show 
 
 if (!html.includes("Scan lain masih berjalan")) throw Error("Manual scan must explain single-flight skip");
 if (!html.includes("d.skipped")) throw Error("Manual scan must handle already-running response");
+
+
+for (const phrase of ["Diblokir Auto Switch","Penolakan Digiflazz","manual tetap boleh dicoba"]) {
+  if (!html.includes(phrase)) throw Error("Missing persistent seller rejection UI: " + phrase);
+}
