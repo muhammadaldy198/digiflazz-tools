@@ -33,3 +33,6 @@ if (!html.includes('value="cooldown"') || !html.includes('value="blocked-max"') 
   throw Error("Attention-state product filters are incomplete");
 }
 if (!html.includes("Status Auto Switch")) throw Error("Product detail must show Auto Switch attention state");
+
+if (!html.includes("Scan lain masih berjalan")) throw Error("Manual scan must explain single-flight skip");
+if (!html.includes("d.skipped")) throw Error("Manual scan must handle already-running response");

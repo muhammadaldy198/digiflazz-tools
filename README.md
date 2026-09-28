@@ -101,5 +101,6 @@ Migrasi D1 yang digunakan saat ini:
 - `0004_switch_operations.sql`
 - `0005_materialized_attention.sql`
 - `0006_quality_refresh_state.sql`
+- `0007_scan_single_flight.sql`
 
 Jangan hardcode cookie, token, secret, account ID, atau kredensial lain ke source.

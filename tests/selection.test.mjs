@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8").replace("const HTML = __HTML__;", "const HTML = '';");
+const scanMigration = readFileSync(new URL("../migrations/0007_scan_single_flight.sql", import.meta.url), "utf8");
 const { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct } = await import("data:text/javascript," + encodeURIComponent(source));
 
 test("seller filtering rejects blocked, expensive, and out of stock candidates", () => {
@@ -299,7 +300,7 @@ test("full scans rotate rating SLA coverage and update only materialized cache b
   assert.match(source,/async function refreshAttentionCoverage/);
   assert.match(source,/ORDER BY CASE WHEN max\(o\.last_seen\) IS NULL THEN 0 ELSE 1 END ASC/);
   assert.match(source,/COALESCE\(max\(o\.last_seen\),q\.last_attempt,'1970-01-01 00:00:00'\) ASC/);
-  assert.match(source,/const qualityRefresh=await refreshAttentionCoverage\(env,cfg\.attentionRefreshBatchSize\)/);
+  assert.match(source,/const qualityRefresh=await refreshAttentionCoverage\(env,cfg\.attentionRefreshBatchSize,deadlineMs\)/);
   assert.match(source,/const cacheRefresh=await refreshAttentionCache\(env,cfg,null,100\)/);
   assert.match(source,/attentionSummary\(env,cfg\)/);
 });
@@ -394,7 +395,7 @@ test("cron drains dirty materialized attention incrementally",()=>{
 
 
 test("all D1 SKU IN-list batches stay at or below the verified 75-bind boundary",()=>{
-  assert.match(source,/for \(let i=0;i<products\.length;i\+=75\) \{\s*const chunk = products\.slice\(i,i\+75\)/);
+  assert.match(source,/for \(let i=0;i<products\.length;i\+=75\) \{\s*ensureScanBudget\(deadlineMs\);\s*const chunk = products\.slice\(i,i\+75\)/);
   assert.match(source,/for\(let i=0;i<stale\.results\.length;i\+=75\) \{\s*const skus=stale\.results\.slice\(i,i\+75\)/);
   assert.doesNotMatch(source,/products\.length;i\+=100/);
   assert.doesNotMatch(source,/stale\.results\.length;i\+=80/);
@@ -686,7 +687,7 @@ test("seller quality refresh errors receive a short retry backoff",()=>{
 test("empty seller refreshes still invalidate attention for recalculation",()=>{
   const block=source.slice(source.indexOf("async function refreshAttentionCoverage"),source.indexOf("async function rankedOptions"));
   assert.match(block,/refreshedSkus\.push\(row\.sku\)/);
-  assert.match(block,/return \{refreshed,empty,failed,skus:refreshedSkus\}/);
+  assert.match(block,/return \{refreshed,empty,failed,deferred,skus:refreshedSkus\}/);
 });
 
 
@@ -764,4 +765,35 @@ test("product detail uses same attention state and Max Price blocker semantics",
   assert.match(block,/maxPriceBlockedReplacement/);
   assert.match(block,/last_success_switch_at/);
   assert.match(block,/attentionActionState/);
+});
+
+
+test("scan migration enforces a single running scan",()=>{
+  assert.match(scanMigration,/CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_runs_single_running/);
+  assert.match(scanMigration,/ON scan_runs\(status\)/);
+  assert.match(scanMigration,/WHERE status='running'/);
+});
+
+test("scan acquisition skips overlap and expires stale runs after five minutes",()=>{
+  const start=source.indexOf("async function acquireScanRun");
+  const block=source.slice(start,source.indexOf("const [catalog",start));
+  assert.match(block,/started_at < datetime\('now','-5 minutes'\)/);
+  assert.match(block,/WHERE status='running' ORDER BY id DESC LIMIT 1/);
+  assert.match(block,/reason:"already_running"/);
+});
+
+test("full scan fetches catalog categories concurrently under a time budget",()=>{
+  const start=source.indexOf("function ensureScanBudget");
+  const block=source.slice(start,source.indexOf("function inCutoffWindow(",start));
+  assert.match(block,/const deadlineMs=Date\.now\(\)\+90000/);
+  assert.match(block,/Promise\.all\(categoryTargets\.map/);
+  assert.match(block,/ensureScanBudget\(deadlineMs\)/);
+  assert.match(block,/budget waktu aman 90 detik/);
+});
+
+test("quality refresh defers work when scan budget is almost exhausted",()=>{
+  const block=source.slice(source.indexOf("async function refreshAttentionCoverage"),source.indexOf("async function rankedOptions"));
+  assert.match(block,/deadlineMs&&Date\.now\(\)\+22000>=deadlineMs/);
+  assert.match(block,/deferred=rows\.results\.length-index/);
+  assert.match(block,/ditunda karena budget waktu scan hampir habis/);
 });
