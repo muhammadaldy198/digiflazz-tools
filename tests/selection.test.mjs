@@ -522,7 +522,7 @@ test("definitive Digiflazz 4xx rejection is recorded as error, not unknown",()=>
 });
 
 test("auto switch temporarily excludes a recently rejected seller target",()=>{
-  assert.match(source,/status='error' AND started_at > datetime\('now','-6 hours'\)/);
+  assert.match(source,/status='error' AND started_at > datetime\('now','-24 hours'\)/);
   assert.match(source,/eligibleOptions=selection\.options\.filter/);
   assert.match(source,/eligibleOptions=selection\.options\.filter/);
   assert.ok(source.includes("String(o.seller_id)!==rejectedId"));
@@ -590,7 +590,7 @@ test("disconnecting a Digiflazz session is explicit and logged",()=>{
 test("attention materialization excludes a recently rejected seller target",()=>{
   assert.match(source,/op\.target_seller_id AS operation_target_seller_id/);
   assert.match(source,/op\.started_at AS operation_started_at/);
-  assert.match(source,/Date\.now\(\)-rejectedAt<6\*3600000/);
+  assert.match(source,/Date\.now\(\)-rejectedAt<24\*3600000/);
   assert.match(source,/policyOptions=rejectedId\?options\.filter/);
 });
 
@@ -806,4 +806,10 @@ test("product UI exposes quick attention filters backed by server status filters
   }
   assert.ok(uiSource.includes('a.startsWith("quick-status:")'));
   assert.ok(uiSource.includes('state.status=a.slice("quick-status:".length)'));
+});
+
+
+test("definitive seller rejection backoff lasts 24 hours",()=>{
+  assert.match(source,/Date\.now\(\)-rejectedAt<24\*3600000/);
+  assert.match(source,/started_at > datetime\('now','-24 hours'\)/);
 });
