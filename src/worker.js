@@ -565,6 +565,16 @@ const EMERGENCY_SWITCH_SQL="(a.reasons_json LIKE '%Seller belum dipilih%' OR a.r
 function hasCurrentSellerIssue(reasons) {
   return (reasons||[]).some(reason=>CURRENT_SELLER_ISSUE_REASONS.includes(reason)||/^Rating < /i.test(reason));
 }
+function requiredMaxPriceFromReasons(reasons) {
+  for(const reason of reasons||[]) {
+    const match=String(reason).match(/Kandidat lolos aturan tetapi di atas Max Price \((\d+)\)/i);
+    if(match) {
+      const value=Number(match[1]);
+      if(Number.isSafeInteger(value)&&value>0)return value;
+    }
+  }
+  return null;
+}
 function hasEmergencySwitchReason(reasons) {
   return (reasons||[]).some(reason=>
     ["Seller belum dipilih","Seller OFF","Seller saat ini tidak ada di kandidat terbaru","Harga di atas max price","Stok habis","Sedang cut-off"].includes(reason)
@@ -716,7 +726,7 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
     const maxPriceBlocked=!replacement?maxPriceBlockedReplacement(ranked,row.current_seller_sku_id):null;
     const attention_reasons=attentionReasons(row,config,new Date(),{ranked,current,best});
     if(persistentRejected.size&&attention_reasons.length)attention_reasons.push("Kandidat tertentu diblokir Auto Switch setelah ditolak Digiflazz");
-    if(maxPriceBlocked)attention_reasons.push("Kandidat lolos aturan tetapi di atas Max Price ("+Math.round(Number(maxPriceBlocked.price)||0)+")");
+    if(maxPriceBlocked&&attention_reasons.length)attention_reasons.push("Kandidat lolos aturan tetapi di atas Max Price ("+Math.round(Number(maxPriceBlocked.price)||0)+")");
     return {
       ...row,
       nominal_value:productNominalValue(row),
@@ -1374,7 +1384,7 @@ async function api(req, env, url) {
         let attention_reasons=[];
         try { attention_reasons=JSON.parse(row.reasons_json||"[]"); } catch {}
         const product={...row,attention_reasons,needs_attention:Boolean(row.needs_attention),attention_dirty:Boolean(row.attention_dirty),locked:Boolean(row.locked)};
-        return {...product,attention_state:attentionActionState(product,cfg)};
+        return {...product,required_max_price:requiredMaxPriceFromReasons(attention_reasons),attention_state:attentionActionState(product,cfg)};
       });
       return reply({ok:true,total:Number(count?.total)||0,page,products,categories:categories.results.map(x=>x.category),brands:brands.results.map(x=>x.brand)});
     }
@@ -1398,9 +1408,9 @@ async function api(req, env, url) {
         const maxPriceBlocked=!replacement?maxPriceBlockedReplacement(policyOptions,currentId):null;
         const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:policyOptions.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config,new Date(),{ranked:policyOptions,current,best});
         if(persistentMap.size&&attention.length)attention.push("Kandidat tertentu diblokir Auto Switch setelah ditolak Digiflazz");
-        if(maxPriceBlocked)attention.push("Kandidat lolos aturan tetapi di atas Max Price ("+Math.round(Number(maxPriceBlocked.price)||0)+")");
+        if(maxPriceBlocked&&attention.length)attention.push("Kandidat lolos aturan tetapi di atas Max Price ("+Math.round(Number(maxPriceBlocked.price)||0)+")");
         const cached={...d.product,operation_status:op?.status,current_rating:current?.rating??null,current_sla:current?.sla??null,option_count:policyOptions.length,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:replacement?.seller_name||null,best_candidate_price:replacement?.price??null,best_candidate_rating:replacement?.rating??null,best_candidate_sla:replacement?.sla_days??null,last_success_switch_at:lastSuccess?.last_success_switch_at||null};
-        const product={...cached,raw:undefined,current_seller_sku_id:currentId,attention_dirty:false,locked:Boolean(d.product.locked)};
+        const product={...cached,raw:undefined,current_seller_sku_id:currentId,attention_dirty:false,locked:Boolean(d.product.locked),required_max_price:requiredMaxPriceFromReasons(attention)};
         product.attention_state=attentionActionState(product,d.config);
         await persistAttentionRows(env,[cached]);
         return {ok:true,product,operation:op,options:d.options.map(({raw,...option})=>({...option,auto_block_reason:persistentMap.get(String(option.seller_id))?.reason||null})),connectorReady};

@@ -732,6 +732,12 @@ test("attention detects replacement blocked only by per-product Max Price",()=>{
   assert.match(source,/function maxPriceBlockedReplacement/);
   assert.match(source,/x\.reasons\.length===1&&x\.reasons\[0\]==="Harga di atas batas"/);
   assert.match(source,/Kandidat lolos aturan tetapi di atas Max Price/);
+  assert.match(source,/function requiredMaxPriceFromReasons/);
+  const attentionBlock=source.slice(source.indexOf("async function loadAttentionRows"),source.indexOf("function attentionBreakdown"));
+  assert.match(attentionBlock,/if\(maxPriceBlocked&&attention_reasons\.length\)/);
+  const detailStart=source.indexOf("const shape=async(d,connectorReady)=>");
+  const detailBlock=source.slice(detailStart,source.indexOf("const lock=path.match",detailStart));
+  assert.match(detailBlock,/if\(maxPriceBlocked&&attention\.length\)/);
 });
 
 test("attention action state distinguishes actionable cooldown max-price and no-candidate",()=>{
@@ -800,6 +806,12 @@ test("quality refresh defers work when scan budget is almost exhausted",()=>{
   assert.match(block,/ditunda karena budget waktu scan hampir habis/);
 });
 
+
+test("product UI shows exact replacement Max Price without changing it automatically",()=>{
+  assert.ok(uiSource.includes("Kandidat butuh"));
+  assert.ok(uiSource.includes('data-action="use-required-max"'));
+  assert.ok(uiSource.includes("Tekan Simpan Max Price untuk mengirim ke Digiflazz"));
+});
 
 test("product UI exposes quick attention filters backed by server status filters",()=>{
   for(const status of ["issues","actionable","cooldown","blocked-max","current-issue","no-candidate"]){
