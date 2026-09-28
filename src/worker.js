@@ -4,7 +4,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const DEFAULTS = {
   scanEnabled: false, dryRun: true, autoSwitch: false, scanIntervalMinutes: 5,
-  minRating: 4, minReviews: 10,
+  minRating: 4, minReviews: 0,
   saveMode: "manual",
   cooldownHours: 24, autoSwitchBatchSize: 5, attentionRefreshBatchSize: 5,
   priceTolerancePercent: 2
@@ -277,7 +277,6 @@ async function settings(env) {
       try { values[r.key] = JSON.parse(r.value); } catch {}
     }
   }
-  values.minReviews = Math.max(10, Number(values.minReviews)||0);
   return values;
 }
 function validateSettings(input, current) {
@@ -287,7 +286,7 @@ function validateSettings(input, current) {
     if (["scanEnabled","dryRun","autoSwitch"].includes(key)) next[key] = bool(value);
     else if (["minRating","minReviews","scanIntervalMinutes","cooldownHours","autoSwitchBatchSize","attentionRefreshBatchSize","priceTolerancePercent"].includes(key)) {
       const limits = {
-        minRating:[4,5],minReviews:[10,100000],scanIntervalMinutes:[5,1440],
+        minRating:[4,5],minReviews:[0,100000],scanIntervalMinutes:[5,1440],
         cooldownHours:[1,720],autoSwitchBatchSize:[1,10],attentionRefreshBatchSize:[1,10],priceTolerancePercent:[0,20]
       };
       next[key] = bounded(value, ...limits[key], current[key]);
