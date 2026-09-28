@@ -687,7 +687,7 @@ test("seller ranking queries expose the stable seller account id from candidate 
 });
 
 test("overview seller count comes from candidate seller identities",()=>{
-  assert.match(source,/count\(DISTINCT CASE WHEN json_extract\(raw,'\$\.seller_id'\)/);
+  assert.match(source,/count\(DISTINCT CASE WHEN json_extract\(o\.raw,'\$\.seller_id'\)/);
   assert.doesNotMatch(source,/SELECT count\(\*\) total FROM sellers/);
 });
 
