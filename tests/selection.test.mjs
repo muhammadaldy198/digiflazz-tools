@@ -395,7 +395,7 @@ test("cron drains dirty materialized attention incrementally",()=>{
 
 
 test("all D1 SKU IN-list batches stay at or below the verified 75-bind boundary",()=>{
-  assert.match(source,/for \(let i=0;i<products\.length;i\+=75\) \{\s*const chunk = products\.slice\(i,i\+75\)/);
+  assert.match(source,/for \(let i=0;i<products\.length;i\+=75\) \{\s*ensureScanBudget\(deadlineMs\);\s*const chunk = products\.slice\(i,i\+75\)/);
   assert.match(source,/for\(let i=0;i<stale\.results\.length;i\+=75\) \{\s*const skus=stale\.results\.slice\(i,i\+75\)/);
   assert.doesNotMatch(source,/products\.length;i\+=100/);
   assert.doesNotMatch(source,/stale\.results\.length;i\+=80/);
@@ -687,7 +687,7 @@ test("seller quality refresh errors receive a short retry backoff",()=>{
 test("empty seller refreshes still invalidate attention for recalculation",()=>{
   const block=source.slice(source.indexOf("async function refreshAttentionCoverage"),source.indexOf("async function rankedOptions"));
   assert.match(block,/refreshedSkus\.push\(row\.sku\)/);
-  assert.match(block,/return \{refreshed,empty,failed,skus:refreshedSkus\}/);
+  assert.match(block,/return \{refreshed,empty,failed,deferred,skus:refreshedSkus\}/);
 });
 
 
