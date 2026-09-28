@@ -82,6 +82,19 @@ function parseCurl(value) {
   if (!headers.cookie) throw Error("Cookie sesi tidak ditemukan.");
   return { url: url.toString(), method, headers, capturedAt: new Date().toISOString() };
 }
+function accessIssuer(teamDomain) {
+  const host=str(teamDomain).replace(/^https?:\/\//i,"").replace(/\/+$/,"");
+  return host?"https://"+host:"";
+}
+function accessClaimsValid(payload,env,nowSec=Math.floor(Date.now()/1000)) {
+  const issuer=accessIssuer(env.ACCESS_TEAM_DOMAIN);
+  const exp=Number(payload?.exp),nbf=payload?.nbf==null?null:Number(payload.nbf);
+  if(!issuer||payload?.iss!==issuer)return false;
+  if(!Array.isArray(payload?.aud)||!payload.aud.includes(env.ACCESS_AUD))return false;
+  if(!Number.isFinite(exp)||exp<nowSec-60)return false;
+  if(nbf!=null&&(!Number.isFinite(nbf)||nbf>nowSec+60))return false;
+  return true;
+}
 async function authorize(request, env) {
   if (!env.ACCESS_AUD || !env.ACCESS_TEAM_DOMAIN) return false;
   const jwt = request.headers.get("cf-access-jwt-assertion");
@@ -91,8 +104,8 @@ async function authorize(request, env) {
   try {
     const header = JSON.parse(decoder.decode(fromBase64(parts[0])));
     const payload = JSON.parse(decoder.decode(fromBase64(parts[1])));
-    if (!Array.isArray(payload.aud) || !payload.aud.includes(env.ACCESS_AUD) || payload.exp <= Math.floor(Date.now() / 1000)) return false;
-    const certUrl = "https://" + env.ACCESS_TEAM_DOMAIN + "/cdn-cgi/access/certs";
+    if (!accessClaimsValid(payload,env)) return false;
+    const certUrl = accessIssuer(env.ACCESS_TEAM_DOMAIN) + "/cdn-cgi/access/certs";
     if (!globalThis.__accessCertCache || globalThis.__accessCertCache.expires < Date.now()) {
       const certs = await fetch(certUrl).then(r => r.json());
       globalThis.__accessCertCache = { keys: certs.keys || [], expires: Date.now() + 600000 };
@@ -1659,7 +1672,7 @@ async function api(req, env, url) {
     return failure(error, /sesi|Digiflazz mengembalikan|format katalog|tidak mengembalikan/i.test(error.message)?502:400);
   }
 }
-export { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct, maxPriceBlockedReplacement, effectiveMinRating };
+export { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct, maxPriceBlockedReplacement, effectiveMinRating, accessIssuer, accessClaimsValid };
 export default {
   async fetch(req,env) {
     const url=new URL(req.url);

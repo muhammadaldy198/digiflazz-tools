@@ -5,7 +5,7 @@ const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8"
 const scanMigration = readFileSync(new URL("../migrations/0007_scan_single_flight.sql", import.meta.url), "utf8");
 const sellerRejectionMigration = readFileSync(new URL("../migrations/0008_seller_rejections.sql", import.meta.url), "utf8");
 const uiSource = readFileSync(new URL("../src/ui.html", import.meta.url), "utf8");
-const { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct, maxPriceBlockedReplacement, effectiveMinRating } = await import("data:text/javascript," + encodeURIComponent(source));
+const { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct, maxPriceBlockedReplacement, effectiveMinRating, accessIssuer, accessClaimsValid } = await import("data:text/javascript," + encodeURIComponent(source));
 
 test("seller filtering rejects blocked, expensive, and out of stock candidates", () => {
   const product = { max_price: 11000 };
@@ -748,6 +748,20 @@ test("missing Max Price metric and filter only include active products",()=>{
   assert.match(api,/status==="missing-max"\)where\+=" AND p\.active=1 AND p\.max_price<=0"/);
 });
 
+test("Cloudflare Access claims require correct issuer audience and token lifetime",()=>{
+  const env={ACCESS_TEAM_DOMAIN:"lfamilia.cloudflareaccess.com",ACCESS_AUD:"aud-1"};
+  const now=2_000_000_000;
+  const valid={iss:"https://lfamilia.cloudflareaccess.com",aud:["aud-1"],exp:now+300};
+  assert.equal(accessIssuer("https://lfamilia.cloudflareaccess.com/"),"https://lfamilia.cloudflareaccess.com");
+  assert.equal(accessClaimsValid(valid,env,now),true);
+  assert.equal(accessClaimsValid({...valid,iss:"https://other.cloudflareaccess.com"},env,now),false);
+  assert.equal(accessClaimsValid({...valid,aud:["other"]},env,now),false);
+  assert.equal(accessClaimsValid({...valid,exp:now-61},env,now),false);
+  assert.equal(accessClaimsValid({...valid,nbf:now+61},env,now),false);
+  assert.equal(accessClaimsValid({...valid,exp:undefined},env,now),false);
+  assert.equal(accessClaimsValid({...valid,nbf:now+60},env,now),true);
+});
+
 test("API keeps only health public and requires Cloudflare Access for every other route",()=>{
   const apiStart=source.indexOf("async function api(req, env, url)");
   const apiEnd=source.indexOf("export {",apiStart);
@@ -770,6 +784,15 @@ test("API mutations require same-origin requests after Access authorization",()=
   assert.ok(originPos>authPos);
   assert.match(apiBlock,/method!=="GET" && method!=="HEAD"/);
   assert.match(apiBlock,/return failure\("Asal permintaan tidak sah\.",403\)/);
+});
+
+test("Access verifier checks claims before signature verification and uses normalized issuer cert URL",()=>{
+  const start=source.indexOf("async function authorize(request, env)");
+  const end=source.indexOf("async function conn(env)",start);
+  const block=source.slice(start,end);
+  assert.match(block,/accessClaimsValid\(payload,env\)/);
+  assert.match(block,/accessIssuer\(env\.ACCESS_TEAM_DOMAIN\) \+ "\/cdn-cgi\/access\/certs"/);
+  assert.ok(block.indexOf("accessClaimsValid(payload,env)") < block.indexOf("crypto.subtle.verify"));
 });
 
 test("top-level fetch never serves dashboard HTML before Access authorization",()=>{
