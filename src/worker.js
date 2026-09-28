@@ -1293,16 +1293,30 @@ async function updateMaxPrice(env,sku,amount) {
 async function reconcile(env,sku) {
   const op=await env.DB.prepare("SELECT status,target_seller_id,started_at FROM switch_operations WHERE sku=?").bind(sku).first();
   if(!op || !["pending","unknown"].includes(op.status)) throw Error("Tidak ada perubahan tertunda untuk diperiksa.");
-  if(op.status==="pending" && Date.now()-Date.parse(op.started_at.replace(" ","T")+"Z")<120000) throw Error("Permintaan masih diproses. Tunggu dua menit sebelum memeriksa ulang.");
+  const startedAt=Date.parse(String(op.started_at||"").replace(" ","T")+"Z");
+  if(Number.isFinite(startedAt)&&Date.now()-startedAt<120000) throw Error("Hasil perubahan belum aman disimpulkan. Tunggu dua menit sebelum memeriksa ulang.");
   const fresh=await freshProduct(env,sku);
-  const confirmed=op.target_seller_id.startsWith("max:")
+  const maxOperation=op.target_seller_id.startsWith("max:");
+  const confirmed=maxOperation
     ? Number(fresh.max_price)===Number(op.target_seller_id.slice(4))
     : String(fresh.seller_sku_id)===op.target_seller_id;
   const status=confirmed?"success":"error";
-  await env.DB.prepare("UPDATE switch_operations SET status=? WHERE sku=?").bind(status,sku).run();
-  if(!op.target_seller_id.startsWith("max:")) await env.DB.prepare("UPDATE switch_history SET status=? WHERE id=(SELECT id FROM switch_history WHERE buyer_sku_code=? AND status IN ('pending','unknown') ORDER BY id DESC LIMIT 1)").bind(status,sku).run();
+  const normalized=normalizeProduct(fresh);
+  if(!normalized)throw Error("Data produk terbaru Digiflazz tidak dapat dinormalisasi.");
+  const statements=[
+    env.DB.prepare("UPDATE switch_operations SET status=? WHERE sku=?").bind(status,sku),
+    env.DB.prepare("UPDATE products SET seller_id=?,seller_name=?,price=?,max_price=?,active=?,seller_active=?,stock=?,unlimited_stock=?,raw=?,nominal_value=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(
+      normalized.seller_id,normalized.seller_name,normalized.price,normalized.max_price,normalized.active,normalized.seller_active,
+      normalized.stock,normalized.unlimited_stock,JSON.stringify(fresh),Number.isFinite(productNominalValue(normalized))?productNominalValue(normalized):null,sku
+    )
+  ];
+  if(!maxOperation) {
+    statements.push(env.DB.prepare("UPDATE switch_history SET status=? WHERE id=(SELECT id FROM switch_history WHERE buyer_sku_code=? AND status IN ('pending','unknown') ORDER BY id DESC LIMIT 1)").bind(status,sku));
+    if(confirmed)statements.push(env.DB.prepare("DELETE FROM seller_rejections WHERE sku=? AND seller_id=?").bind(sku,op.target_seller_id));
+  }
+  await env.DB.batch(statements);
   await markAttentionDirty(env,[sku]);
-  await log(env,confirmed?"INFO":"WARN","reconcile",confirmed?"Perubahan terkonfirmasi di Digiflazz.":"Target tidak ditemukan pada data terbaru; periksa sebelum mengulang.",sku);
+  await log(env,confirmed?"INFO":"WARN","reconcile",confirmed?"Perubahan terkonfirmasi di Digiflazz dan cache produk disinkronkan.":"Target tidak ditemukan pada data terbaru; cache produk disinkronkan sebelum percobaan berikutnya.",sku);
   return {ok:true,confirmed,status};
 }
 async function canonicalRuleTarget(env, scopeType, value) {

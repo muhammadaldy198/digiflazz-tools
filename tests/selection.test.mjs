@@ -762,6 +762,25 @@ test("Cloudflare Access claims require correct issuer audience and token lifetim
   assert.equal(accessClaimsValid({...valid,nbf:now+60},env,now),true);
 });
 
+test("reconcile waits before resolving both pending and unknown operations",()=>{
+  const block=source.slice(source.indexOf("async function reconcile"),source.indexOf("async function canonicalRuleTarget"));
+  assert.match(block,/\["pending","unknown"\]\.includes\(op\.status\)/);
+  assert.match(block,/Date\.now\(\)-startedAt<120000/);
+  assert.doesNotMatch(block,/op\.status==="pending" &&/);
+});
+
+test("reconcile synchronizes the fresh Digiflazz product snapshot before unblocking retries",()=>{
+  const block=source.slice(source.indexOf("async function reconcile"),source.indexOf("async function canonicalRuleTarget"));
+  assert.match(block,/const normalized=normalizeProduct\(fresh\)/);
+  assert.match(block,/UPDATE products SET seller_id=\?,seller_name=\?,price=\?,max_price=\?,active=\?,seller_active=\?,stock=\?,unlimited_stock=\?,raw=\?,nominal_value=\?/);
+  assert.match(block,/await env\.DB\.batch\(statements\)/);
+});
+
+test("confirmed seller reconciliation clears a prior seller policy block",()=>{
+  const block=source.slice(source.indexOf("async function reconcile"),source.indexOf("async function canonicalRuleTarget"));
+  assert.match(block,/if\(confirmed\)statements\.push\(env\.DB\.prepare\("DELETE FROM seller_rejections WHERE sku=\? AND seller_id=\?"/);
+});
+
 test("API keeps only health public and requires Cloudflare Access for every other route",()=>{
   const apiStart=source.indexOf("async function api(req, env, url)");
   const apiEnd=source.indexOf("export {",apiStart);
