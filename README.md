@@ -17,6 +17,7 @@ Dashboard pribadi untuk mengelola katalog dan Auto Switch seller Digiflazz di `h
 - Auto Switch hanya memasukkan SKU yang benar-benar punya kandidat pengganti yang memenuhi semua aturan. Produk bermasalah tanpa kandidat tetap muncul di **Perlu perhatian** tetapi tidak menghabiskan batch otomatis.
 - Cooldown perpindahan, batch Auto Switch, refresh rating/SLA, dan scan interval dapat dikonfigurasi dari panel.
 - Hasil HTTP 4xx Digiflazz diklasifikasikan sebagai penolakan pasti. Target seller yang baru ditolak tidak langsung dicoba ulang.
+- Penolakan kebijakan akun yang persisten (misalnya persyaratan KTP/verifikasi administrasi seller) diblokir per SKU+seller dari Auto Switch sampai percobaan manual berhasil.
 - Seller options per SKU direfresh sebagai snapshot terbaru. Opsi seller lama yang sudah hilang di Digiflazz dibuang.
 - Produk yang endpoint seller-nya menghasilkan daftar kosong diberi backoff 6 jam; error refresh biasa diberi retry 30 menit agar slot refresh tidak macet pada SKU yang sama.
 - Ringkasan menampilkan **Perlu perhatian**, **Siap Auto Switch**, coverage rating/SLA, Max Price kosong, dan status scan.
@@ -68,7 +69,7 @@ Production saat ini menggunakan:
 - scan interval: 5 menit
 - Auto Switch batch: 5 SKU
 - cooldown: 24 jam
-- refresh rating/SLA: 10 SKU per full scan
+- refresh rating/SLA: 5 SKU per full scan
 - min rating: 4
 - min reviews: 0
 - toleransi harga: 2%
@@ -102,5 +103,6 @@ Migrasi D1 yang digunakan saat ini:
 - `0005_materialized_attention.sql`
 - `0006_quality_refresh_state.sql`
 - `0007_scan_single_flight.sql`
+- `0008_seller_rejections.sql`
 
 Jangan hardcode cookie, token, secret, account ID, atau kredensial lain ke source.
