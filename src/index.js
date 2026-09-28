@@ -450,11 +450,14 @@ function reviewValue(value) {
   const n=Number(match[0]);
   return text.startsWith("<")?Math.max(0,n-1):n;
 }
+function effectiveMinRating(rule,config) {
+  const configured=Number(rule?.min_rating ?? config?.minRating ?? 4);
+  return Math.max(4,Math.min(5,Number.isFinite(configured)?configured:4));
+}
 function rank(product, rows, prefs, rule, config, zone) {
   const blocked = new Set(prefs.filter(p=>p.mode==="blocked").map(p=>p.seller_name.toLowerCase()));
   const max = Number(product.max_price)>0 ? Number(product.max_price) : Infinity;
-  const configuredMinRating=Number(rule?.min_rating ?? config.minRating ?? 4);
-  const minRating=Math.max(4,Math.min(5,Number.isFinite(configuredMinRating)?configuredMinRating:4));
+  const minRating=effectiveMinRating(rule,config);
   const tolerance=bounded(config.priceTolerancePercent,0,20,2);
   const mapped=rows.map(x => {
     const reasons = [];
@@ -637,7 +640,7 @@ function attentionReasons(product, config, now=new Date(), context=null) {
   if(Number(product.option_count)>0) {
     if(!str(product.current_option_seller_id)) reasons.push("Seller saat ini tidak ada di kandidat terbaru");
     else {
-      const minRating=Math.max(4,Math.min(5,Number(config.minRating)||4));
+      const minRating=Math.max(4,Math.min(5,Number(context?.minRating ?? config.minRating)||4));
       const currentRating=product.current_rating==null?null:Number(product.current_rating);
       if(currentRating==null||!Number.isFinite(currentRating))reasons.push("Rating tidak tersedia");
       else if(currentRating<minRating)reasons.push("Rating < "+minRating);
@@ -751,7 +754,7 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
     const best=ranked.find(x=>x.eligible)||null;
     const replacement=ranked.find(x=>x.eligible&&String(x.seller_id)!==String(row.current_seller_sku_id))||null;
     const maxPriceBlocked=!replacement?maxPriceBlockedReplacement(ranked,row.current_seller_sku_id):null;
-    const attention_reasons=attentionReasons(row,config,new Date(),{ranked,current,best});
+    const attention_reasons=attentionReasons(row,config,new Date(),{ranked,current,best,minRating:effectiveMinRating(rule,config)});
     if(persistentRejected.size&&attention_reasons.length)attention_reasons.push("Kandidat tertentu diblokir Auto Switch setelah ditolak Digiflazz");
     if(maxPriceBlocked&&attention_reasons.length)attention_reasons.push("Kandidat lolos aturan tetapi di atas Max Price ("+Math.round(Number(maxPriceBlocked.price)||0)+")");
     return {
@@ -1005,7 +1008,7 @@ async function rankedOptions(env, sku, refresh = true) {
     env.DB.prepare("SELECT * FROM seller_rules WHERE is_active=1 AND (scope_type='global' OR (scope_type='product' AND scope_value=?) OR (scope_type='brand' AND scope_value=(SELECT brand FROM products WHERE sku=?)) OR (scope_type='category' AND scope_value=(SELECT category FROM products WHERE sku=?)) OR (scope_type='type' AND scope_value=(SELECT product_type FROM products WHERE sku=?))) ORDER BY CASE scope_type WHEN 'product' THEN 0 WHEN 'type' THEN 1 WHEN 'brand' THEN 2 WHEN 'category' THEN 3 ELSE 4 END,id DESC LIMIT 1").bind(sku,sku,sku,sku).first(),
     env.DB.prepare("SELECT z.patterns FROM zones z JOIN zone_assignments a ON a.zone_id=z.id WHERE a.sku=?").bind(sku).first(),settings(env)
   ]);
-  return { product, config, options:rank(product, options.results, preferences.results, rule, config, zone?{patterns:JSON.parse(zone.patterns)}:null) };
+  return { product, config, minRating:effectiveMinRating(rule,config), options:rank(product, options.results, preferences.results, rule, config, zone?{patterns:JSON.parse(zone.patterns)}:null) };
 }
 async function findProductBySku(env, sku) {
   let result;
@@ -1441,7 +1444,7 @@ async function api(req, env, url) {
         const best=policyOptions.find(x=>x.eligible)||null;
         const replacement=policyOptions.find(x=>x.eligible&&String(x.seller_id)!==currentId)||null;
         const maxPriceBlocked=!replacement?maxPriceBlockedReplacement(policyOptions,currentId):null;
-        const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:policyOptions.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config,new Date(),{ranked:policyOptions,current,best});
+        const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:policyOptions.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config,new Date(),{ranked:policyOptions,current,best,minRating:d.minRating});
         if(persistentMap.size&&attention.length)attention.push("Kandidat tertentu diblokir Auto Switch setelah ditolak Digiflazz");
         if(maxPriceBlocked&&attention.length)attention.push("Kandidat lolos aturan tetapi di atas Max Price ("+Math.round(Number(maxPriceBlocked.price)||0)+")");
         const cached={...d.product,operation_status:op?.status,current_rating:current?.rating??null,current_sla:current?.sla??null,option_count:policyOptions.length,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:replacement?.seller_name||null,best_candidate_price:replacement?.price??null,best_candidate_rating:replacement?.rating??null,best_candidate_sla:replacement?.sla_days??null,last_success_switch_at:lastSuccess?.last_success_switch_at||null};
@@ -1656,7 +1659,7 @@ async function api(req, env, url) {
     return failure(error, /sesi|Digiflazz mengembalikan|format katalog|tidak mengembalikan/i.test(error.message)?502:400);
   }
 }
-export { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct, maxPriceBlockedReplacement };
+export { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct, maxPriceBlockedReplacement, effectiveMinRating };
 export default {
   async fetch(req,env) {
     const url=new URL(req.url);
