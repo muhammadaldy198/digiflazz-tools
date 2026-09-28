@@ -540,6 +540,18 @@ function maxPriceBlockedReplacement(ranked,currentSellerId) {
     .filter(x=>String(x.seller_id)!==String(currentSellerId)&&Array.isArray(x.reasons)&&x.reasons.length===1&&x.reasons[0]==="Harga di atas batas")
     .sort((a,b)=>Number(a.price)-Number(b.price))[0]||null;
 }
+const CURRENT_SELLER_ISSUE_REASONS=[
+  "Seller belum dipilih",
+  "Seller OFF",
+  "Seller saat ini tidak ada di kandidat terbaru",
+  "Rating tidak tersedia",
+  "Stok habis",
+  "Sedang cut-off"
+];
+const CURRENT_SELLER_ISSUE_SQL="(a.reasons_json LIKE '%Seller belum dipilih%' OR a.reasons_json LIKE '%Seller OFF%' OR a.reasons_json LIKE '%Seller saat ini tidak ada di kandidat terbaru%' OR a.reasons_json LIKE '%Rating tidak tersedia%' OR a.reasons_json LIKE '%Rating < %' OR a.reasons_json LIKE '%Stok habis%' OR a.reasons_json LIKE '%Sedang cut-off%')";
+function hasCurrentSellerIssue(reasons) {
+  return (reasons||[]).some(reason=>CURRENT_SELLER_ISSUE_REASONS.includes(reason)||/^Rating < /i.test(reason));
+}
 function attentionActionState(row,config) {
   if(Boolean(row.attention_dirty))return "evaluating";
   if(!Boolean(row.needs_attention))return "ok";
@@ -551,6 +563,7 @@ function attentionActionState(row,config) {
   if(row.best_candidate_seller)return "actionable";
   const reasons=Array.isArray(row.attention_reasons)?row.attention_reasons:[];
   if(reasons.some(x=>/Kandidat lolos aturan tetapi di atas Max Price/i.test(x)))return "max-price";
+  if(hasCurrentSellerIssue(reasons))return "current-seller";
   return "no-candidate";
 }
 function attentionReasons(product, config, now=new Date(), context=null) {
@@ -815,12 +828,13 @@ async function attentionSummary(env, config) {
     actionableAttentionCount(env,config),
     env.DB.prepare(`SELECT
       sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json LIKE ? THEN 1 ELSE 0 END) maxPriceBlocked,
-      sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ? THEN 1 ELSE 0 END) noCandidate,
+      sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ? AND ${CURRENT_SELLER_ISSUE_SQL} THEN 1 ELSE 0 END) currentSellerIssue,
+      sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ? AND NOT ${CURRENT_SELLER_ISSUE_SQL} THEN 1 ELSE 0 END) noCandidate,
       sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NOT NULL
         AND EXISTS(SELECT 1 FROM switch_history sh WHERE sh.buyer_sku_code=a.sku AND sh.status='success' AND sh.created_at>?)
         THEN 1 ELSE 0 END) cooldown
       FROM product_attention a JOIN products p ON p.sku=a.sku WHERE p.active=1`)
-      .bind(maxBlockPattern,maxBlockPattern,autoSwitchCooldownCutoff(config)).first()
+      .bind(maxBlockPattern,maxBlockPattern,maxBlockPattern,autoSwitchCooldownCutoff(config)).first()
   ]);
   return {
     products:Number(summary?.products)||0,
@@ -835,6 +849,7 @@ async function attentionSummary(env, config) {
       siap:autoReady,
       cooldown:Number(states?.cooldown)||0,
       maxPrice:Number(states?.maxPriceBlocked)||0,
+      currentSeller:Number(states?.currentSellerIssue)||0,
       tanpaKandidat:Number(states?.noCandidate)||0
     },
     attentionBreakdown:{
@@ -1268,8 +1283,12 @@ async function api(req, env, url) {
         where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json LIKE ?";
         args.push(maxBlockPattern);
       }
+      else if(status==="current-issue"){
+        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ? AND "+CURRENT_SELLER_ISSUE_SQL;
+        args.push(maxBlockPattern);
+      }
       else if(status==="no-candidate"){
-        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ?";
+        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ? AND NOT "+CURRENT_SELLER_ISSUE_SQL;
         args.push(maxBlockPattern);
       }
       else if(status==="missing-max")where+=" AND p.max_price<=0";

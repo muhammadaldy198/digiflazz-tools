@@ -801,13 +801,25 @@ test("quality refresh defers work when scan budget is almost exhausted",()=>{
 
 
 test("product UI exposes quick attention filters backed by server status filters",()=>{
-  for(const status of ["issues","actionable","cooldown","blocked-max","no-candidate"]){
+  for(const status of ["issues","actionable","cooldown","blocked-max","current-issue","no-candidate"]){
     assert.ok(uiSource.includes("quick-status:"+status));
   }
   assert.ok(uiSource.includes('a.startsWith("quick-status:")'));
   assert.ok(uiSource.includes('state.status=a.slice("quick-status:".length)'));
 });
 
+
+test("attention distinguishes a current seller problem from generic no-candidate",()=>{
+  const stateBlock=source.slice(source.indexOf("function attentionActionState"),source.indexOf("function attentionReasons"));
+  assert.match(source,/function hasCurrentSellerIssue/);
+  assert.match(stateBlock,/return "current-seller"/);
+  assert.match(stateBlock,/return "no-candidate"/);
+  const apiBlock=source.slice(source.indexOf('if (method==="GET" && path==="/api/products")'),source.indexOf("const opt=path.match"));
+  assert.match(apiBlock,/status==="current-issue"/);
+  assert.match(apiBlock,/CURRENT_SELLER_ISSUE_SQL/);
+  assert.ok(uiSource.includes("Masalah seller saat ini"));
+  assert.ok(uiSource.includes("Tidak ada kandidat memenuhi syarat"));
+});
 
 test("definitive seller rejection backoff lasts 24 hours",()=>{
   assert.match(source,/Date\.now\(\)-rejectedAt<24\*3600000/);
