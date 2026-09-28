@@ -316,6 +316,8 @@ async function cacheSellerDirectory(env,sellers) {
     JSON.stringify(x.raw).slice(0,20000)
   ));
   for(let i=0;i<stmts.length;i+=80)await env.DB.batch(stmts.slice(i,i+80));
+  await env.DB.prepare("INSERT INTO app_settings(key,value) VALUES('seller_directory_count',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP")
+    .bind(JSON.stringify(sellers.length)).run();
 }
 async function log(env, level, kind, message, sku = null) {
   await env.DB.prepare("INSERT INTO events(level,kind,sku,message) VALUES(?,?,?,?)").bind(level, kind, sku, String(message).slice(0, 400)).run();
@@ -772,13 +774,11 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
       cur.seller_id AS current_option_seller_id,
       cur.rating AS current_rating,
       cur.sla AS current_sla,
-      json_extract(cur.raw,'$.rating_qty') AS current_review_count,
-      COALESCE(option_counts.option_count,0) AS option_count
+      json_extract(cur.raw,'$.rating_qty') AS current_review_count
     FROM products p
     LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku
     LEFT JOIN switch_operations op ON op.sku=p.sku
     LEFT JOIN seller_options cur ON cur.sku=p.sku AND cur.seller_id=json_extract(p.raw,'$.seller_sku_id')
-    LEFT JOIN (SELECT sku,count(*) AS option_count FROM seller_options GROUP BY sku) option_counts ON option_counts.sku=p.sku
     `+where
   ).bind(...args).all();
   if(!rows.results.length)return [];
@@ -833,24 +833,25 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
   }
   return rows.results.map(row=>{
     const options=optionsBySku.get(row.sku)||[];
-    const rejectedAt=row.operation_status==="error"&&row.operation_started_at
-      ?Date.parse(String(row.operation_started_at).replace(" ","T")+"Z")
+    const hydratedRow={...row,option_count:options.length};
+    const rejectedAt=hydratedRow.operation_status==="error"&&hydratedRow.operation_started_at
+      ?Date.parse(String(hydratedRow.operation_started_at).replace(" ","T")+"Z")
       :0;
-    const rejectedId=rejectedAt&&Date.now()-rejectedAt<24*3600000?str(row.operation_target_seller_id):"";
-    const persistentRejected=rejectedBySku.get(row.sku)||new Map();
+    const rejectedId=rejectedAt&&Date.now()-rejectedAt<24*3600000?str(hydratedRow.operation_target_seller_id):"";
+    const persistentRejected=rejectedBySku.get(hydratedRow.sku)||new Map();
     const policyOptions=options.filter(x=>(!rejectedId||String(x.seller_id)!==rejectedId)&&!persistentRejected.has(String(x.seller_id)));
-    const rule=matchingRuleForProduct(row,rules);
-    const ranked=rank(row,policyOptions,preferences,rule,config,zoneBySku.get(row.sku)||null);
-    const current=ranked.find(x=>String(x.seller_id)===String(row.current_seller_sku_id))||null;
+    const rule=matchingRuleForProduct(hydratedRow,rules);
+    const ranked=rank(hydratedRow,policyOptions,preferences,rule,config,zoneBySku.get(hydratedRow.sku)||null);
+    const current=ranked.find(x=>String(x.seller_id)===String(hydratedRow.current_seller_sku_id))||null;
     const best=ranked.find(x=>x.eligible)||null;
-    const replacement=ranked.find(x=>x.eligible&&String(x.seller_id)!==String(row.current_seller_sku_id))||null;
-    const maxPriceBlocked=!replacement?maxPriceBlockedReplacement(ranked,row.current_seller_sku_id):null;
-    const attention_reasons=attentionReasons(row,config,new Date(),{ranked,current,best,minRating:effectiveMinRating(rule,config)});
+    const replacement=ranked.find(x=>x.eligible&&String(x.seller_id)!==String(hydratedRow.current_seller_sku_id))||null;
+    const maxPriceBlocked=!replacement?maxPriceBlockedReplacement(ranked,hydratedRow.current_seller_sku_id):null;
+    const attention_reasons=attentionReasons(hydratedRow,config,new Date(),{ranked,current,best,minRating:effectiveMinRating(rule,config)});
     if(persistentRejected.size&&attention_reasons.length)attention_reasons.push("Kandidat tertentu diblokir Auto Switch setelah ditolak Digiflazz");
     if(maxPriceBlocked&&attention_reasons.length)attention_reasons.push("Kandidat lolos aturan tetapi di atas Max Price ("+Math.round(Number(maxPriceBlocked.price)||0)+")");
     return {
-      ...row,
-      nominal_value:productNominalValue(row),
+      ...hydratedRow,
+      nominal_value:productNominalValue(hydratedRow),
       best_candidate_seller:replacement?.seller_name||null,
       best_candidate_price:replacement?.price??null,
       best_candidate_rating:replacement?.rating??null,
@@ -978,11 +979,12 @@ async function actionableAttentionRows(env, config, limit) {
 }
 async function attentionSummary(env, config) {
   const maxBlockPattern='%Kandidat lolos aturan tetapi di atas Max Price%';
-  const [summary,quality,autoReady,states]=await Promise.all([
+  const [summary,autoReady,states]=await Promise.all([
     env.DB.prepare(`SELECT
       count(*) products,
       sum(CASE WHEN p.active=1 THEN 1 ELSE 0 END) activeProducts,
       sum(CASE WHEN p.active=1 AND p.max_price<=0 THEN 1 ELSE 0 END) missingMaxPrice,
+      sum(CASE WHEN p.active=1 AND a.dirty=0 AND a.option_count>0 THEN 1 ELSE 0 END) qualityKnown,
       sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 THEN 1 ELSE 0 END) issues,
       sum(CASE WHEN a.dirty=0 AND a.operational_issue=1 THEN 1 ELSE 0 END) operational,
       sum(CASE WHEN a.dirty=0 AND a.quality_issue=1 THEN 1 ELSE 0 END) quality,
@@ -991,7 +993,6 @@ async function attentionSummary(env, config) {
       sum(CASE WHEN a.sku IS NULL OR a.dirty=1 THEN 1 ELSE 0 END) attentionPending,
       sum(CASE WHEN a.dirty=0 THEN 1 ELSE 0 END) attentionFresh
     FROM products p LEFT JOIN product_attention a ON a.sku=p.sku`).first(),
-    env.DB.prepare("SELECT count(DISTINCT o.sku) total FROM seller_options o JOIN products p ON p.sku=o.sku WHERE p.active=1").first(),
     actionableAttentionCount(env,config),
     env.DB.prepare(`SELECT
       sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json LIKE ? AND NOT ${CURRENT_SELLER_ISSUE_SQL} THEN 1 ELSE 0 END) maxPriceBlocked,
@@ -1010,7 +1011,7 @@ async function attentionSummary(env, config) {
     missingMaxPrice:Number(summary?.missingMaxPrice)||0,
     issues:Number(summary?.issues)||0,
     autoSwitchReady:autoReady,
-    qualityKnown:Number(quality?.total)||0,
+    qualityKnown:Number(summary?.qualityKnown)||0,
     attentionFresh:Number(summary?.attentionFresh)||0,
     attentionPending:Number(summary?.attentionPending)||0,
     attentionStateBreakdown:{
@@ -1046,15 +1047,13 @@ async function refreshOptions(env, sku, productId) {
 async function refreshAttentionCoverage(env, requestedLimit=5, deadlineMs=0) {
   const limit=Math.trunc(bounded(requestedLimit,1,10,5));
   const rows=await env.DB.prepare(`
-    SELECT p.sku,p.product_id,max(o.last_seen) AS quality_last_seen,q.next_retry_at,q.last_attempt
+    SELECT p.sku,p.product_id,q.next_retry_at,q.last_attempt
     FROM products p
-    LEFT JOIN seller_options o ON o.sku=p.sku
     LEFT JOIN quality_refresh_state q ON q.sku=p.sku
     WHERE p.active=1
       AND (q.next_retry_at IS NULL OR q.next_retry_at<=CURRENT_TIMESTAMP)
-    GROUP BY p.sku,p.product_id,q.next_retry_at,q.last_attempt
-    ORDER BY CASE WHEN max(o.last_seen) IS NULL THEN 0 ELSE 1 END ASC,
-      COALESCE(max(o.last_seen),q.last_attempt,'1970-01-01 00:00:00') ASC,
+    ORDER BY CASE WHEN q.last_attempt IS NULL THEN 0 ELSE 1 END ASC,
+      COALESCE(q.last_attempt,'1970-01-01 00:00:00') ASC,
       p.sku ASC
     LIMIT ?
   `).bind(limit).all();
@@ -1428,12 +1427,14 @@ async function api(req, env, url) {
       const cfg=await settings(env);
       const [c, counts, sellerCount, last, events, verified]=await Promise.all([
         conn(env),attentionSummary(env,cfg),
-        env.DB.prepare("SELECT count(DISTINCT CASE WHEN json_extract(o.raw,'$.seller_id') IS NOT NULL AND trim(json_extract(o.raw,'$.seller_id'))<>'' THEN 'sid:'||json_extract(o.raw,'$.seller_id') ELSE 'name:'||lower(trim(o.seller_name)) END) total FROM seller_options o JOIN products p ON p.sku=o.sku WHERE p.active=1").first(),
+        env.DB.prepare("SELECT value FROM app_settings WHERE key='seller_directory_count'").first(),
         env.DB.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").first(),
         env.DB.prepare("SELECT id,level,kind,sku,message,created_at FROM events ORDER BY id DESC LIMIT 8").all(),
         env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first()
       ]);
-      return reply({ok:true,connection:{connected:!!c,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at},settings:cfg,counts:{...counts,sellers:Number(sellerCount?.total)||0},lastScan:last,events:events.results,liveSwitchAvailable:!!verified});
+      let sellers=0;
+      try{sellers=Math.max(0,Number(JSON.parse(sellerCount?.value??"0"))||0)}catch{}
+      return reply({ok:true,connection:{connected:!!c,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at},settings:cfg,counts:{...counts,sellers},lastScan:last,events:events.results,liveSwitchAvailable:!!verified});
     }
     if (method==="GET" && path==="/api/connection/status") {
       const c=await conn(env);
@@ -1489,7 +1490,7 @@ async function api(req, env, url) {
         args.push(cooldownCutoff);
       }
       else if(status==="cooldown"){
-        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NOT NULL AND NOT "+EMERGENCY_SWITCH_SQL+" AND last_switch.last_success_switch_at>?";
+        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NOT NULL AND NOT "+EMERGENCY_SWITCH_SQL+" AND EXISTS (SELECT 1 FROM switch_history sh WHERE sh.buyer_sku_code=p.sku AND sh.status='success' AND sh.created_at>?)";
         args.push(cooldownCutoff);
       }
       else if(status==="blocked-max"){
@@ -1510,11 +1511,7 @@ async function api(req, env, url) {
       const from=` FROM products p
         LEFT JOIN product_attention a ON a.sku=p.sku
         LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku
-        LEFT JOIN switch_operations op ON op.sku=p.sku
-        LEFT JOIN (
-          SELECT buyer_sku_code,max(created_at) AS last_success_switch_at
-          FROM switch_history WHERE status='success' GROUP BY buyer_sku_code
-        ) last_switch ON last_switch.buyer_sku_code=p.sku `;
+        LEFT JOIN switch_operations op ON op.sku=p.sku `;
       const brandSql=category?"SELECT DISTINCT brand FROM products WHERE category=? AND brand<>'' ORDER BY brand COLLATE NOCASE":"SELECT DISTINCT brand FROM products WHERE brand<>'' ORDER BY brand COLLATE NOCASE";
       const [count,rows,categories,brands]=await Promise.all([
         env.DB.prepare("SELECT count(*) total"+from+where).bind(...args).first(),
@@ -1522,7 +1519,8 @@ async function api(req, env, url) {
           l.buyer_sku_code IS NOT NULL AS locked,
           COALESCE(a.needs_attention,0) AS needs_attention,COALESCE(a.dirty,1) AS attention_dirty,
           a.reasons_json,a.current_rating,a.current_sla,a.best_candidate_seller,a.best_candidate_price,a.best_candidate_rating,a.best_candidate_sla,
-          a.option_count,a.operation_status,last_switch.last_success_switch_at
+          a.option_count,a.operation_status,
+          (SELECT sh.created_at FROM switch_history sh WHERE sh.buyer_sku_code=p.sku AND sh.status='success' ORDER BY sh.created_at DESC LIMIT 1) AS last_success_switch_at
           `+from+where+`
           ORDER BY p.brand COLLATE NOCASE ASC,
             CASE WHEN p.nominal_value IS NULL THEN 1 ELSE 0 END ASC,
