@@ -137,6 +137,14 @@ async function remoteJson(env, path) {
   if (!res.headers.get("content-type")?.includes("json")) throw Error("Digiflazz tidak mengembalikan JSON untuk " + path);
   return res.json();
 }
+function isPersistentPolicyRejection(detail) {
+  const text=str(detail).toLowerCase();
+  return /\bktp\b|administrasi perpajakan|hubungi admin digiflazz|mewajibkan buyer|verifikasi.{0,40}(?:admin|akun)|(?:admin|akun).{0,40}verifikasi/i.test(text);
+}
+async function activeSellerRejections(env, sku) {
+  const rows=await env.DB.prepare("SELECT seller_id,seller_name,reason,permanent,retry_after FROM seller_rejections WHERE sku=? AND (permanent=1 OR retry_after>CURRENT_TIMESTAMP)").bind(sku).all();
+  return rows.results||[];
+}
 async function remoteSave(env, body) {
   const row = await conn(env);
   if (!row || !env.SESSION_ENCRYPTION_KEY) throw Error("Sesi Digiflazz belum terhubung.");
@@ -158,7 +166,9 @@ async function remoteSave(env, body) {
     } catch {}
     const error=Error("Digiflazz menolak perubahan produk (HTTP "+res.status+")"+(detail?": "+detail.slice(0,160):"."));
     error.status=res.status;
+    error.detail=detail;
     error.definitive=res.status>=400&&res.status<500&&![408,409,423,425,429].includes(res.status);
+    error.policyBlock=error.definitive&&isPersistentPolicyRejection(detail);
     throw error;
   }
   if (!contentType.includes("json")) {
@@ -170,7 +180,9 @@ async function remoteSave(env, body) {
   if (data.status === false || data.success === false || data.error) {
     const detail=str(data?.message ?? data?.error?.message ?? data?.error);
     const error=Error("Digiflazz tidak menerima perubahan produk"+(detail?": "+detail.slice(0,160):"."));
+    error.detail=detail;
     error.definitive=true;
+    error.policyBlock=isPersistentPolicyRejection(detail);
     throw error;
   }
   return data;
@@ -636,17 +648,24 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
     const placeholders=chunk.map(()=>"?").join(",");
     return env.DB.prepare("SELECT a.sku,z.patterns FROM zone_assignments a JOIN zones z ON z.id=a.zone_id WHERE a.sku IN ("+placeholders+")").bind(...chunk);
   });
+  const rejectionStatements=chunks.map(chunk=>{
+    const placeholders=chunk.map(()=>"?").join(",");
+    return env.DB.prepare("SELECT sku,seller_id,seller_name,reason FROM seller_rejections WHERE sku IN ("+placeholders+") AND (permanent=1 OR retry_after>CURRENT_TIMESTAMP)").bind(...chunk);
+  });
   const batch=await env.DB.batch([
     ...optionStatements,
     ...zoneStatements,
+    ...rejectionStatements,
     env.DB.prepare("SELECT seller_name,mode FROM seller_preferences"),
     env.DB.prepare("SELECT * FROM seller_rules WHERE is_active=1")
   ]);
   const optionRows=batch.slice(0,optionStatements.length).flatMap(result=>result.results||[]);
   const zoneOffset=optionStatements.length;
   const zoneRows=batch.slice(zoneOffset,zoneOffset+zoneStatements.length).flatMap(result=>result.results||[]);
-  const preferences=batch[zoneOffset+zoneStatements.length]?.results||[];
-  const rules=batch[zoneOffset+zoneStatements.length+1]?.results||[];
+  const rejectionOffset=zoneOffset+zoneStatements.length;
+  const rejectionRows=batch.slice(rejectionOffset,rejectionOffset+rejectionStatements.length).flatMap(result=>result.results||[]);
+  const preferences=batch[rejectionOffset+rejectionStatements.length]?.results||[];
+  const rules=batch[rejectionOffset+rejectionStatements.length+1]?.results||[];
   const optionsBySku=new Map();
   for(const option of optionRows) {
     if(!optionsBySku.has(option.sku))optionsBySku.set(option.sku,[]);
@@ -656,13 +675,19 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
   for(const row of zoneRows) {
     try { zoneBySku.set(row.sku,{patterns:JSON.parse(row.patterns)}); } catch {}
   }
+  const rejectedBySku=new Map();
+  for(const rejection of rejectionRows) {
+    if(!rejectedBySku.has(rejection.sku))rejectedBySku.set(rejection.sku,new Map());
+    rejectedBySku.get(rejection.sku).set(String(rejection.seller_id),rejection);
+  }
   return rows.results.map(row=>{
     const options=optionsBySku.get(row.sku)||[];
     const rejectedAt=row.operation_status==="error"&&row.operation_started_at
       ?Date.parse(String(row.operation_started_at).replace(" ","T")+"Z")
       :0;
     const rejectedId=rejectedAt&&Date.now()-rejectedAt<6*3600000?str(row.operation_target_seller_id):"";
-    const policyOptions=rejectedId?options.filter(x=>String(x.seller_id)!==rejectedId):options;
+    const persistentRejected=rejectedBySku.get(row.sku)||new Map();
+    const policyOptions=options.filter(x=>(!rejectedId||String(x.seller_id)!==rejectedId)&&!persistentRejected.has(String(x.seller_id)));
     const rule=matchingRuleForProduct(row,rules);
     const ranked=rank(row,policyOptions,preferences,rule,config,zoneBySku.get(row.sku)||null);
     const current=ranked.find(x=>String(x.seller_id)===String(row.current_seller_sku_id))||null;
@@ -670,6 +695,7 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
     const replacement=ranked.find(x=>x.eligible&&String(x.seller_id)!==String(row.current_seller_sku_id))||null;
     const maxPriceBlocked=!replacement?maxPriceBlockedReplacement(ranked,row.current_seller_sku_id):null;
     const attention_reasons=attentionReasons(row,config,new Date(),{ranked,current,best});
+    if(persistentRejected.size)attention_reasons.push("Kandidat tertentu diblokir Auto Switch setelah ditolak Digiflazz");
     if(maxPriceBlocked)attention_reasons.push("Kandidat lolos aturan tetapi di atas Max Price ("+Math.round(Number(maxPriceBlocked.price)||0)+")");
     return {
       ...row,
@@ -1061,6 +1087,7 @@ async function switchSeller(env, sku, sellerId, reason, preparedSelection = null
     await env.DB.batch([
       env.DB.prepare("UPDATE switch_history SET status='success' WHERE id=?").bind(record.meta.last_row_id),
       env.DB.prepare("UPDATE switch_operations SET status='success' WHERE sku=?").bind(sku),
+      env.DB.prepare("DELETE FROM seller_rejections WHERE sku=? AND seller_id=?").bind(sku,sellerId),
       env.DB.prepare("UPDATE products SET seller_id=?,seller_name=?,price=?,max_price=?,seller_active=?,stock=?,unlimited_stock=?,raw=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(
         normalizedVerified.seller_id,normalizedVerified.seller_name,normalizedVerified.price,normalizedVerified.max_price,normalizedVerified.seller_active,normalizedVerified.stock,normalizedVerified.unlimited_stock,JSON.stringify(verified),sku
       )
@@ -1070,11 +1097,15 @@ async function switchSeller(env, sku, sellerId, reason, preparedSelection = null
     return {ok:true,sku,seller:candidate.seller_name,price:candidate.price,verified:true};
   } catch(error) {
     const status=error?.definitive===true?"error":sent?"unknown":"error";
-    await env.DB.batch([
+    const statements=[
       env.DB.prepare("UPDATE switch_history SET status=? WHERE id=?").bind(status,record.meta.last_row_id),
       env.DB.prepare("UPDATE switch_operations SET status=? WHERE sku=?").bind(status,sku)
-    ]);
-    await log(env,"ERROR","switch",error.message+(status==="error"?" Target ditandai gagal; Auto Switch tidak mengulang seller ini sementara.":" Hasil belum pasti; tidak diulang otomatis."),sku);
+    ];
+    if(error?.policyBlock===true) {
+      statements.push(env.DB.prepare("INSERT INTO seller_rejections(sku,seller_id,seller_name,reason,permanent,retry_after,rejected_at) VALUES(?,?,?,?,1,NULL,CURRENT_TIMESTAMP) ON CONFLICT(sku,seller_id) DO UPDATE SET seller_name=excluded.seller_name,reason=excluded.reason,permanent=1,retry_after=NULL,rejected_at=CURRENT_TIMESTAMP").bind(sku,sellerId,candidate.seller_name,str(error.detail||error.message).slice(0,300)));
+    }
+    await env.DB.batch(statements);
+    await log(env,"ERROR","switch",error.message+(error?.policyBlock===true?" Seller ini diblokir dari Auto Switch sampai berhasil dicoba manual setelah persyaratan akun dibereskan.":status==="error"?" Target ditandai gagal; Auto Switch tidak mengulang seller ini sementara.":" Hasil belum pasti; tidak diulang otomatis."),sku);
     throw error;
   }
 }
@@ -1097,9 +1128,12 @@ async function autoSwitchBatch(env, requestedLimit) {
     try {
       const selection=await rankedOptions(env,sku);
       const current=JSON.parse(selection.product.raw),currentId=String(current.seller_sku_id??"");
-      const rejected=await env.DB.prepare("SELECT target_seller_id FROM switch_operations WHERE sku=? AND status='error' AND started_at > datetime('now','-6 hours')").bind(sku).first();
-      const rejectedId=str(rejected?.target_seller_id);
-      const eligibleOptions=selection.options.filter(o=>o.eligible&&(!rejectedId||String(o.seller_id)!==rejectedId));
+      const [rejected,persistent]=await Promise.all([
+        env.DB.prepare("SELECT target_seller_id FROM switch_operations WHERE sku=? AND status='error' AND started_at > datetime('now','-6 hours')").bind(sku).first(),
+        activeSellerRejections(env,sku)
+      ]);
+      const rejectedId=str(rejected?.target_seller_id),persistentIds=new Set(persistent.map(x=>String(x.seller_id)));
+      const eligibleOptions=selection.options.filter(o=>o.eligible&&(!rejectedId||String(o.seller_id)!==rejectedId)&&!persistentIds.has(String(o.seller_id)));
       const top=eligibleOptions[0]||null;
       const hardIssue=target.attention_reasons.some(reason=>[
         "Seller belum dipilih","Seller OFF","Harga di atas max price","Stok habis","Sedang cut-off"
@@ -1312,25 +1346,28 @@ async function api(req, env, url) {
     if (method==="GET" && opt) {
       const sku=decodeURIComponent(opt[1]);
       const shape=async(d,connectorReady)=>{
-        const [op,lastSuccess]=await Promise.all([
+        const [op,lastSuccess,persistent]=await Promise.all([
           env.DB.prepare("SELECT status,target_seller_id,started_at FROM switch_operations WHERE sku=?").bind(sku).first(),
-          env.DB.prepare("SELECT max(created_at) last_success_switch_at FROM switch_history WHERE buyer_sku_code=? AND status='success'").bind(sku).first()
+          env.DB.prepare("SELECT max(created_at) last_success_switch_at FROM switch_history WHERE buyer_sku_code=? AND status='success'").bind(sku).first(),
+          activeSellerRejections(env,sku)
         ]);
         const raw=JSON.parse(d.product.raw),currentId=String(raw.seller_sku_id??"");
         const rejectedAt=op?.status==="error"&&op?.started_at?Date.parse(String(op.started_at).replace(" ","T")+"Z"):0;
         const rejectedId=rejectedAt&&Date.now()-rejectedAt<6*3600000?str(op?.target_seller_id):"";
-        const policyOptions=rejectedId?d.options.filter(x=>String(x.seller_id)!==rejectedId):d.options;
+        const persistentMap=new Map(persistent.map(x=>[String(x.seller_id),x]));
+        const policyOptions=d.options.filter(x=>(!rejectedId||String(x.seller_id)!==rejectedId)&&!persistentMap.has(String(x.seller_id)));
         const current=policyOptions.find(x=>String(x.seller_id)===currentId)||null;
         const best=policyOptions.find(x=>x.eligible)||null;
         const replacement=policyOptions.find(x=>x.eligible&&String(x.seller_id)!==currentId)||null;
         const maxPriceBlocked=!replacement?maxPriceBlockedReplacement(policyOptions,currentId):null;
         const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:policyOptions.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config,new Date(),{ranked:policyOptions,current,best});
+        if(persistentMap.size)attention.push("Kandidat tertentu diblokir Auto Switch setelah ditolak Digiflazz");
         if(maxPriceBlocked)attention.push("Kandidat lolos aturan tetapi di atas Max Price ("+Math.round(Number(maxPriceBlocked.price)||0)+")");
         const cached={...d.product,operation_status:op?.status,current_rating:current?.rating??null,current_sla:current?.sla??null,option_count:policyOptions.length,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:replacement?.seller_name||null,best_candidate_price:replacement?.price??null,best_candidate_rating:replacement?.rating??null,best_candidate_sla:replacement?.sla_days??null,last_success_switch_at:lastSuccess?.last_success_switch_at||null};
         const product={...cached,raw:undefined,current_seller_sku_id:currentId,attention_dirty:false,locked:Boolean(d.product.locked)};
         product.attention_state=attentionActionState(product,d.config);
         await persistAttentionRows(env,[cached]);
-        return {ok:true,product,operation:op,options:d.options.map(({raw,...option})=>option),connectorReady};
+        return {ok:true,product,operation:op,options:d.options.map(({raw,...option})=>({...option,auto_block_reason:persistentMap.get(String(option.seller_id))?.reason||null})),connectorReady};
       };
       try { return reply(await shape(await rankedOptions(env,sku),true)); }
       catch(error) { await log(env,"WARN","seller-options",error.message,sku); }
