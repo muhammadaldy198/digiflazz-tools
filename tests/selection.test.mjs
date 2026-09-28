@@ -653,8 +653,8 @@ test("product API exposes the same actionable Auto Switch filter",()=>{
 
 test("seller preference API supports normal, preferred, and blocked modes",()=>{
   assert.match(source,/\["preferred","blocked","none"\]\.includes\(body\.mode\)/);
-  assert.match(source,/mode='preferred'/);
-  assert.match(source,/mode='blocked'/);
+  assert.match(source,/INSERT INTO seller_preferences\(seller_name,mode\)/);
+  assert.match(source,/prefMap\.get\(key\.toLowerCase\(\)\)/);
 });
 
 
