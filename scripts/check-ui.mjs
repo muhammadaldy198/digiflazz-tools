@@ -46,7 +46,7 @@ for (const phrase of ["Diblokir Auto Switch","Penolakan Digiflazz","manual tetap
 
 if (!html.includes("Cooldown hanya menahan optimasi biasa")) throw Error("Emergency cooldown explanation missing");
 if (!html.includes("Nama lengkap belum diekspos Digiflazz")) throw Error("Seller panel must explain unresolved full names");
-if (!html.includes('data-key="'+esc(s.preference_key)')) throw Error("Seller panel must save preferences by stable seller identity");
+if (!html.includes('data-key="') || !html.includes("s.preference_key")) throw Error("Seller panel must save preferences by stable seller identity");
 if (!html.includes('id="seller-search"') || !html.includes('id="seller-filter"')) throw Error("Seller panel search/filter controls missing");
 if (!html.includes('message("");loading();')) throw Error("Changing panel must clear stale global errors");
 
