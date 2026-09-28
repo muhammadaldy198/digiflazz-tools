@@ -511,6 +511,24 @@ function matchingRuleForProduct(product,rules) {
     return false;
   }).sort((a,b)=>(priority[a.scope_type]??9)-(priority[b.scope_type]??9)||Number(b.id||0)-Number(a.id||0))[0]||null;
 }
+function maxPriceBlockedReplacement(ranked,currentSellerId) {
+  return (ranked||[])
+    .filter(x=>String(x.seller_id)!==String(currentSellerId)&&Array.isArray(x.reasons)&&x.reasons.length===1&&x.reasons[0]==="Harga di atas batas")
+    .sort((a,b)=>Number(a.price)-Number(b.price))[0]||null;
+}
+function attentionActionState(row,config) {
+  if(Boolean(row.attention_dirty))return "evaluating";
+  if(!Boolean(row.needs_attention))return "ok";
+  if(["pending","unknown"].includes(str(row.operation_status)))return "pending";
+  if(Boolean(row.locked))return "locked";
+  const lastMs=row.last_success_switch_at?Date.parse(String(row.last_success_switch_at).replace(" ","T")+"Z"):0;
+  const cooldownMs=(Number(config?.cooldownHours)||24)*3600000;
+  if(row.best_candidate_seller&&lastMs&&Date.now()-lastMs<cooldownMs)return "cooldown";
+  if(row.best_candidate_seller)return "actionable";
+  const reasons=Array.isArray(row.attention_reasons)?row.attention_reasons:[];
+  if(reasons.some(x=>/Kandidat lolos aturan tetapi di atas Max Price/i.test(x)))return "max-price";
+  return "no-candidate";
+}
 function attentionReasons(product, config, now=new Date(), context=null) {
   const reasons=[];
   const operation=str(product.operation_status);
@@ -626,7 +644,9 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
     const current=ranked.find(x=>String(x.seller_id)===String(row.current_seller_sku_id))||null;
     const best=ranked.find(x=>x.eligible)||null;
     const replacement=ranked.find(x=>x.eligible&&String(x.seller_id)!==String(row.current_seller_sku_id))||null;
+    const maxPriceBlocked=!replacement?maxPriceBlockedReplacement(ranked,row.current_seller_sku_id):null;
     const attention_reasons=attentionReasons(row,config,new Date(),{ranked,current,best});
+    if(maxPriceBlocked)attention_reasons.push("Kandidat lolos aturan tetapi di atas Max Price ("+Math.round(Number(maxPriceBlocked.price)||0)+")");
     return {
       ...row,
       nominal_value:productNominalValue(row),
@@ -753,7 +773,8 @@ async function actionableAttentionRows(env, config, limit) {
     .bind(autoSwitchCooldownCutoff(config),Math.trunc(bounded(limit,1,10,5))).all();
 }
 async function attentionSummary(env, config) {
-  const [summary,quality,autoReady]=await Promise.all([
+  const maxBlockPattern='%Kandidat lolos aturan tetapi di atas Max Price%';
+  const [summary,quality,autoReady,states]=await Promise.all([
     env.DB.prepare(`SELECT
       count(*) products,
       sum(CASE WHEN p.active=1 THEN 1 ELSE 0 END) activeProducts,
@@ -767,7 +788,15 @@ async function attentionSummary(env, config) {
       sum(CASE WHEN a.dirty=0 THEN 1 ELSE 0 END) attentionFresh
     FROM products p LEFT JOIN product_attention a ON a.sku=p.sku`).first(),
     env.DB.prepare("SELECT count(DISTINCT o.sku) total FROM seller_options o JOIN products p ON p.sku=o.sku WHERE p.active=1").first(),
-    actionableAttentionCount(env,config)
+    actionableAttentionCount(env,config),
+    env.DB.prepare(`SELECT
+      sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json LIKE ? THEN 1 ELSE 0 END) maxPriceBlocked,
+      sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ? THEN 1 ELSE 0 END) noCandidate,
+      sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NOT NULL
+        AND EXISTS(SELECT 1 FROM switch_history sh WHERE sh.buyer_sku_code=a.sku AND sh.status='success' AND sh.created_at>?)
+        THEN 1 ELSE 0 END) cooldown
+      FROM product_attention a JOIN products p ON p.sku=a.sku WHERE p.active=1`)
+      .bind(maxBlockPattern,maxBlockPattern,autoSwitchCooldownCutoff(config)).first()
   ]);
   return {
     products:Number(summary?.products)||0,
@@ -778,6 +807,12 @@ async function attentionSummary(env, config) {
     qualityKnown:Number(quality?.total)||0,
     attentionFresh:Number(summary?.attentionFresh)||0,
     attentionPending:Number(summary?.attentionPending)||0,
+    attentionStateBreakdown:{
+      siap:autoReady,
+      cooldown:Number(states?.cooldown)||0,
+      maxPrice:Number(states?.maxPriceBlocked)||0,
+      tanpaKandidat:Number(states?.noCandidate)||0
+    },
     attentionBreakdown:{
       operasional:Number(summary?.operational)||0,
       kualitas:Number(summary?.quality)||0,
@@ -1183,7 +1218,9 @@ async function api(req, env, url) {
       const status=str(url.searchParams.get("status"));
       const category=str(url.searchParams.get("category")).slice(0,120);
       const brand=str(url.searchParams.get("brand")).slice(0,120);
-      const cfg=status==="actionable"?await settings(env):null;
+      const cfg=await settings(env);
+      const cooldownCutoff=autoSwitchCooldownCutoff(cfg);
+      const maxBlockPattern='%Kandidat lolos aturan tetapi di atas Max Price%';
       let where="WHERE (p.sku LIKE ? OR p.name LIKE ? OR p.brand LIKE ? OR p.category LIKE ?)";
       const args=[q,q,q,q];
       if(category){where+=" AND p.category=?";args.push(category)}
@@ -1191,7 +1228,19 @@ async function api(req, env, url) {
       if(status==="issues")where+=" AND a.dirty=0 AND a.needs_attention=1";
       else if(status==="actionable"){
         where+=" AND a.dirty=0 AND a.needs_attention=1 AND p.active=1 AND p.max_price>0 AND a.best_candidate_seller IS NOT NULL AND l.buyer_sku_code IS NULL AND COALESCE(op.status,'') NOT IN ('pending','unknown') AND NOT EXISTS (SELECT 1 FROM switch_history sh WHERE sh.buyer_sku_code=p.sku AND sh.status='success' AND sh.created_at>?)";
-        args.push(autoSwitchCooldownCutoff(cfg));
+        args.push(cooldownCutoff);
+      }
+      else if(status==="cooldown"){
+        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NOT NULL AND last_switch.last_success_switch_at>?";
+        args.push(cooldownCutoff);
+      }
+      else if(status==="blocked-max"){
+        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json LIKE ?";
+        args.push(maxBlockPattern);
+      }
+      else if(status==="no-candidate"){
+        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ?";
+        args.push(maxBlockPattern);
       }
       else if(status==="missing-max")where+=" AND p.max_price<=0";
       else if(status==="locked")where+=" AND l.buyer_sku_code IS NOT NULL";
@@ -1200,7 +1249,11 @@ async function api(req, env, url) {
       const from=` FROM products p
         LEFT JOIN product_attention a ON a.sku=p.sku
         LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku
-        LEFT JOIN switch_operations op ON op.sku=p.sku `;
+        LEFT JOIN switch_operations op ON op.sku=p.sku
+        LEFT JOIN (
+          SELECT buyer_sku_code,max(created_at) AS last_success_switch_at
+          FROM switch_history WHERE status='success' GROUP BY buyer_sku_code
+        ) last_switch ON last_switch.buyer_sku_code=p.sku `;
       const brandSql=category?"SELECT DISTINCT brand FROM products WHERE category=? AND brand<>'' ORDER BY brand COLLATE NOCASE":"SELECT DISTINCT brand FROM products WHERE brand<>'' ORDER BY brand COLLATE NOCASE";
       const [count,rows,categories,brands]=await Promise.all([
         env.DB.prepare("SELECT count(*) total"+from+where).bind(...args).first(),
@@ -1208,7 +1261,7 @@ async function api(req, env, url) {
           l.buyer_sku_code IS NOT NULL AS locked,
           COALESCE(a.needs_attention,0) AS needs_attention,COALESCE(a.dirty,1) AS attention_dirty,
           a.reasons_json,a.current_rating,a.current_sla,a.best_candidate_seller,a.best_candidate_price,a.best_candidate_rating,a.best_candidate_sla,
-          a.option_count,a.operation_status
+          a.option_count,a.operation_status,last_switch.last_success_switch_at
           `+from+where+`
           ORDER BY p.brand COLLATE NOCASE ASC,
             CASE WHEN p.nominal_value IS NULL THEN 1 ELSE 0 END ASC,
@@ -1220,7 +1273,8 @@ async function api(req, env, url) {
       const products=rows.results.map(row=>{
         let attention_reasons=[];
         try { attention_reasons=JSON.parse(row.reasons_json||"[]"); } catch {}
-        return {...row,attention_reasons,needs_attention:Boolean(row.needs_attention),attention_dirty:Boolean(row.attention_dirty),locked:Boolean(row.locked)};
+        const product={...row,attention_reasons,needs_attention:Boolean(row.needs_attention),attention_dirty:Boolean(row.attention_dirty),locked:Boolean(row.locked)};
+        return {...product,attention_state:attentionActionState(product,cfg)};
       });
       return reply({ok:true,total:Number(count?.total)||0,page,products,categories:categories.results.map(x=>x.category),brands:brands.results.map(x=>x.brand)});
     }
@@ -1228,7 +1282,10 @@ async function api(req, env, url) {
     if (method==="GET" && opt) {
       const sku=decodeURIComponent(opt[1]);
       const shape=async(d,connectorReady)=>{
-        const op=await env.DB.prepare("SELECT status,target_seller_id,started_at FROM switch_operations WHERE sku=?").bind(sku).first();
+        const [op,lastSuccess]=await Promise.all([
+          env.DB.prepare("SELECT status,target_seller_id,started_at FROM switch_operations WHERE sku=?").bind(sku).first(),
+          env.DB.prepare("SELECT max(created_at) last_success_switch_at FROM switch_history WHERE buyer_sku_code=? AND status='success'").bind(sku).first()
+        ]);
         const raw=JSON.parse(d.product.raw),currentId=String(raw.seller_sku_id??"");
         const rejectedAt=op?.status==="error"&&op?.started_at?Date.parse(String(op.started_at).replace(" ","T")+"Z"):0;
         const rejectedId=rejectedAt&&Date.now()-rejectedAt<6*3600000?str(op?.target_seller_id):"";
@@ -1236,10 +1293,14 @@ async function api(req, env, url) {
         const current=policyOptions.find(x=>String(x.seller_id)===currentId)||null;
         const best=policyOptions.find(x=>x.eligible)||null;
         const replacement=policyOptions.find(x=>x.eligible&&String(x.seller_id)!==currentId)||null;
+        const maxPriceBlocked=!replacement?maxPriceBlockedReplacement(policyOptions,currentId):null;
         const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:policyOptions.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config,new Date(),{ranked:policyOptions,current,best});
-        const cached={...d.product,operation_status:op?.status,current_rating:current?.rating??null,current_sla:current?.sla??null,option_count:policyOptions.length,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:replacement?.seller_name||null,best_candidate_price:replacement?.price??null,best_candidate_rating:replacement?.rating??null,best_candidate_sla:replacement?.sla_days??null};
+        if(maxPriceBlocked)attention.push("Kandidat lolos aturan tetapi di atas Max Price ("+Math.round(Number(maxPriceBlocked.price)||0)+")");
+        const cached={...d.product,operation_status:op?.status,current_rating:current?.rating??null,current_sla:current?.sla??null,option_count:policyOptions.length,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:replacement?.seller_name||null,best_candidate_price:replacement?.price??null,best_candidate_rating:replacement?.rating??null,best_candidate_sla:replacement?.sla_days??null,last_success_switch_at:lastSuccess?.last_success_switch_at||null};
+        const product={...cached,raw:undefined,current_seller_sku_id:currentId,attention_dirty:false,locked:Boolean(d.product.locked)};
+        product.attention_state=attentionActionState(product,d.config);
         await persistAttentionRows(env,[cached]);
-        return {ok:true,product:{...cached,raw:undefined,current_seller_sku_id:currentId},operation:op,options:d.options.map(({raw,...option})=>option),connectorReady};
+        return {ok:true,product,operation:op,options:d.options.map(({raw,...option})=>option),connectorReady};
       };
       try { return reply(await shape(await rankedOptions(env,sku),true)); }
       catch(error) { await log(env,"WARN","seller-options",error.message,sku); }

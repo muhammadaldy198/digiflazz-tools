@@ -723,3 +723,45 @@ test("top-level fetch never serves dashboard HTML before Access authorization",(
   const htmlPos=fetchBlock.indexOf("return new Response(HTML");
   assert.ok(authPos>=0&&htmlPos>authPos);
 });
+
+
+test("attention detects replacement blocked only by per-product Max Price",()=>{
+  assert.match(source,/function maxPriceBlockedReplacement/);
+  assert.match(source,/x\.reasons\.length===1&&x\.reasons\[0\]==="Harga di atas batas"/);
+  assert.match(source,/Kandidat lolos aturan tetapi di atas Max Price/);
+});
+
+test("attention action state distinguishes actionable cooldown max-price and no-candidate",()=>{
+  assert.match(source,/function attentionActionState/);
+  assert.match(source,/return "cooldown"/);
+  assert.match(source,/return "actionable"/);
+  assert.match(source,/return "max-price"/);
+  assert.match(source,/return "no-candidate"/);
+});
+
+test("overview attention summary exposes operational action-state counts",()=>{
+  const block=source.slice(source.indexOf("async function attentionSummary"),source.indexOf("async function refreshOptions"));
+  assert.match(block,/attentionStateBreakdown/);
+  assert.match(block,/maxPriceBlocked/);
+  assert.match(block,/noCandidate/);
+  assert.match(block,/cooldown/);
+  assert.match(block,/Kandidat lolos aturan tetapi di atas Max Price/);
+});
+
+test("product API filters attention by cooldown max-price and no-candidate",()=>{
+  const start=source.indexOf('if (method==="GET" && path==="/api/products")');
+  assert.ok(start>=0);
+  const block=source.slice(start,source.indexOf("const opt=path.match",start));
+  assert.match(block,/status==="cooldown"/);
+  assert.match(block,/status==="blocked-max"/);
+  assert.match(block,/status==="no-candidate"/);
+  assert.match(block,/last_success_switch_at/);
+  assert.match(block,/attention_state:attentionActionState/);
+});
+
+test("product detail uses same attention state and Max Price blocker semantics",()=>{
+  const block=source.slice(source.indexOf("const shape=async(d,connectorReady)=>"),source.indexOf("const lock=path.match",source.indexOf("const shape=async(d,connectorReady)=>")));
+  assert.match(block,/maxPriceBlockedReplacement/);
+  assert.match(block,/last_success_switch_at/);
+  assert.match(block,/attentionActionState/);
+});
