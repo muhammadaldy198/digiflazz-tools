@@ -8,7 +8,7 @@ if (html.includes("Perbaiki harga produk sehat")) throw Error("Unused reoptimize
 for (const forbidden of ["Batas kandidat seller global", "Batas kandidat seller (Rp)", "name=\"priceCap\"", "Product ID Digiflazz", "Pantau kandidat harga lebih baik", "Hemat minimal (%)", "name=\"proactiveScan\"", "name=\"minSavingsPercent\"", "Kode layanan dari nama game", "Temukan jalur API", "/api/service-code", 'value="global"', 'name="require_stock"', 'name="avoid_cutoff"']) {
   if (html.includes(forbidden)) throw Error("Removed control must not be shown: " + forbidden);
 }
-for (const phrase of ["Batas harga tetap Max Price per produk Digiflazz", "Target diambil langsung dari katalog", "Pasangkan produk ke zona", "Cooldown perpindahan (jam)", "SKU per batch Auto Switch", "Auto Seller Browser", "Uji & simpan sesi", "Putuskan sesi", "Siap Auto Switch", "Menunggu cooldown", "Terhalang Max Price", "Masalah seller saat ini", "Tidak ada kandidat memenuhi syarat", "Stok tersedia dan tidak sedang cut-off selalu wajib", "Prioritas</option>", "Tier 4,5–5"]) {
+for (const phrase of ["Batas harga tetap Max Price per produk Digiflazz", "Target diambil langsung dari katalog", "Pasangkan produk ke zona", "Cooldown perpindahan (jam)", "SKU per batch Auto Switch", "Auto Seller Browser", "Uji & simpan sesi", "Putuskan sesi", "Siap Auto Switch", "Menunggu cooldown", "Terhalang Max Price", "Masalah seller saat ini", "Tidak ada kandidat memenuhi syarat", "Stok tersedia dan tidak sedang cut-off selalu wajib", "Prioritas</option>", "Tier rating 4,5–5"]) {
   if (!html.includes(phrase)) throw Error("Missing UI clarification: " + phrase);
 }
 
