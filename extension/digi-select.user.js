@@ -70,6 +70,10 @@
     const clock=new Intl.DateTimeFormat("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"Asia/Jakarta"}).format(now);
     return a<b ? clock>=a&&clock<b : clock>=a||clock<b;
   }
+  function sellerKeys(choice) {
+    const name=str(choice?.seller).toLowerCase(),sid=str(choice?.seller_id).toLowerCase();
+    return [name,name?"name:"+name:"",sid?"sid:"+sid:""].filter(Boolean);
+  }
   function chooseSeller(choices, product, options) {
     const cfg={...DEFAULTS,...options}, blocked=names(cfg.blocked), preferred=names(cfg.preferred);
     const cap=Number(product?.max_price)>0?Number(product.max_price):Infinity;
@@ -82,7 +86,7 @@
       const cutoff=inCutoffWindow(x.start_cut_off??x.seller_details?.start_cut_off,x.end_cut_off??x.seller_details?.end_cut_off,now);
       return x.id!=null &&
         (x.status_sellerSku==null || Number(x.status_sellerSku)===1) && Number.isFinite(price) && price>0 && price<=cap &&
-        !blocked.has(str(x.seller).toLowerCase()) &&
+        !sellerKeys(x).some(key=>blocked.has(key)) &&
         rating!=null && Number.isFinite(rating) && rating>=minRating &&
         reviewCount(x.rating_qty)>=Number(cfg.minReviews||0) &&
         (Number(x.stock)>0 || Number(x.unlimited_stock)===1) &&
@@ -91,7 +95,7 @@
       ...x,
       _sla:slaDays(x.seller_details?.sla),
       _reviews:reviewValue(x.rating_qty),
-      _preferred:preferred.has(str(x.seller).toLowerCase()),
+      _preferred:sellerKeys(x).some(key=>preferred.has(key)),
       _ratingTier:Number(x.reviewAvg)>=preferredRatingFloor?1:0
     }));
     const activeRatingTier=valid.some(x=>x._ratingTier===1)?1:0;

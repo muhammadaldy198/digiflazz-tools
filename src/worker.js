@@ -417,7 +417,7 @@ async function scan(env, reason = "manual") {
         } else await log(env,"WARN","sellers",error.message);
       }
     }
-    const sellerStmts = [...new Set(products.map(x=>x.seller_name).filter(Boolean))].map(name=>env.DB.prepare("INSERT INTO sellers(seller_id,name,raw) VALUES(?,?,?) ON CONFLICT(seller_id) DO NOTHING").bind(name,name,"{}"));
+    const sellerStmts = [...new Set(products.map(x=>str(x.seller_name)).filter(name=>name&&name!=="-"&&!name.includes("*")))].map(name=>env.DB.prepare("INSERT INTO sellers(seller_id,name,raw) VALUES(?,?,?) ON CONFLICT(seller_id) DO NOTHING").bind(name,name,"{}"));
     for (let i=0;i<sellerStmts.length;i+=80) await env.DB.batch(sellerStmts.slice(i,i+80));
     const cfg=await settings(env);
     const qualityRefresh=await refreshAttentionCoverage(env,cfg.attentionRefreshBatchSize,deadlineMs);
@@ -474,16 +474,20 @@ function effectiveMinRating(rule,config) {
   return Math.max(4,Math.min(5,Number.isFinite(configured)?configured:4));
 }
 function rank(product, rows, prefs, rule, config, zone) {
-  const blocked = new Set(prefs.filter(p=>p.mode==="blocked").map(p=>p.seller_name.toLowerCase()));
-  const preferred = new Set(prefs.filter(p=>p.mode==="preferred").map(p=>p.seller_name.toLowerCase()));
+  const blocked = new Set(prefs.filter(p=>p.mode==="blocked").map(p=>str(p.seller_name).toLowerCase()));
+  const preferred = new Set(prefs.filter(p=>p.mode==="preferred").map(p=>str(p.seller_name).toLowerCase()));
   const max = Number(product.max_price)>0 ? Number(product.max_price) : Infinity;
   const minRating=effectiveMinRating(rule,config);
   const preferredRatingFloor=Math.max(4.5,minRating);
   const tolerance=bounded(config.priceTolerancePercent,0,20,2);
   const mapped=rows.map(x => {
     const reasons = [];
-    const name = x.seller_name.toLowerCase();
-    if (blocked.has(name)) reasons.push("Seller diblokir");
+    const name = str(x.seller_name).toLowerCase();
+    const accountKey = str(x.seller_account_id) ? ("sid:"+str(x.seller_account_id)).toLowerCase() : "";
+    const nameKey = name ? "name:"+name : "";
+    const isBlocked = (accountKey&&blocked.has(accountKey)) || blocked.has(name) || (nameKey&&blocked.has(nameKey));
+    const isPreferred = (accountKey&&preferred.has(accountKey)) || preferred.has(name) || (nameKey&&preferred.has(nameKey));
+    if (isBlocked) reasons.push("Seller diblokir");
     if (!x.price || (x.seller_status != null && Number(x.seller_status) !== 1)) reasons.push("Seller tidak aktif");
     if (x.price > max) reasons.push("Harga di atas batas");
     if (minRating > 0 && (x.rating == null || Number(x.rating) < minRating)) reasons.push("Rating kurang atau tidak tersedia");
@@ -500,7 +504,8 @@ function rank(product, rows, prefs, rule, config, zone) {
       reasons,
       sla_days,
       review_value:reviews,
-      preferred:preferred.has(name),
+      preferred:isPreferred,
+      preference_key:accountKey||nameKey||name,
       rating_tier:Number.isFinite(rating)&&rating>=preferredRatingFloor?1:0
     };
   });
@@ -736,6 +741,7 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
   const optionStatements=chunks.map(chunk=>{
     const placeholders=chunk.map(()=>"?").join(",");
     return env.DB.prepare(`SELECT sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description,
+      json_extract(raw,'$.seller_id') AS seller_account_id,
       json_extract(raw,'$.rating_qty') AS review_count,
       json_extract(raw,'$.status_sellerSku') AS seller_status,
       json_extract(raw,'$.start_cut_off') AS start_cut_off,
@@ -1041,7 +1047,7 @@ async function rankedOptions(env, sku, refresh = true) {
   if (refresh) await refreshOptions(env, sku, entry.product_id);
   const [product, options, preferences, rule, zone, config] = await Promise.all([
     env.DB.prepare("SELECT p.*,l.buyer_sku_code IS NOT NULL AS locked FROM products p LEFT JOIN product_locks l ON l.buyer_sku_code=p.sku WHERE p.sku=?").bind(sku).first(),
-    env.DB.prepare("SELECT sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description,json_extract(raw,'$.rating_qty') AS review_count,json_extract(raw,'$.status_sellerSku') AS seller_status,json_extract(raw,'$.start_cut_off') AS start_cut_off,json_extract(raw,'$.end_cut_off') AS end_cut_off,raw FROM seller_options WHERE sku=?").bind(sku).all(),
+    env.DB.prepare("SELECT sku,seller_id,seller_name,price,rating,stock,unlimited_stock,connection,sla,description,json_extract(raw,'$.seller_id') AS seller_account_id,json_extract(raw,'$.rating_qty') AS review_count,json_extract(raw,'$.status_sellerSku') AS seller_status,json_extract(raw,'$.start_cut_off') AS start_cut_off,json_extract(raw,'$.end_cut_off') AS end_cut_off,raw FROM seller_options WHERE sku=?").bind(sku).all(),
     env.DB.prepare("SELECT seller_name,mode FROM seller_preferences").all(),
     env.DB.prepare("SELECT * FROM seller_rules WHERE is_active=1 AND (scope_type='global' OR (scope_type='product' AND scope_value=?) OR (scope_type='brand' AND scope_value=(SELECT brand FROM products WHERE sku=?)) OR (scope_type='category' AND scope_value=(SELECT category FROM products WHERE sku=?)) OR (scope_type='type' AND scope_value=(SELECT product_type FROM products WHERE sku=?))) ORDER BY CASE scope_type WHEN 'product' THEN 0 WHEN 'type' THEN 1 WHEN 'brand' THEN 2 WHEN 'category' THEN 3 ELSE 4 END,id DESC LIMIT 1").bind(sku,sku,sku,sku).first(),
     env.DB.prepare("SELECT z.patterns FROM zones z JOIN zone_assignments a ON a.zone_id=z.id WHERE a.sku=?").bind(sku).first(),settings(env)
@@ -1375,7 +1381,7 @@ async function api(req, env, url) {
       const cfg=await settings(env);
       const [c, counts, sellerCount, last, events, verified]=await Promise.all([
         conn(env),attentionSummary(env,cfg),
-        env.DB.prepare("SELECT count(*) total FROM sellers").first(),
+        env.DB.prepare("SELECT count(DISTINCT CASE WHEN json_extract(o.raw,'$.seller_id') IS NOT NULL AND trim(json_extract(o.raw,'$.seller_id'))<>'' THEN 'sid:'||json_extract(o.raw,'$.seller_id') ELSE 'name:'||lower(trim(o.seller_name)) END) total FROM seller_options o JOIN products p ON p.sku=o.sku WHERE p.active=1").first(),
         env.DB.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").first(),
         env.DB.prepare("SELECT id,level,kind,sku,message,created_at FROM events ORDER BY id DESC LIMIT 8").all(),
         env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first()
@@ -1555,30 +1561,143 @@ async function api(req, env, url) {
     const pending=path.match(/^\/api\/products\/([^/]+)\/reconcile$/);
     if(method==="POST"&&pending)return reply(await reconcile(env,decodeURIComponent(pending[1])));
     if(method==="GET"&&path==="/api/sellers") {
-      const rows=await env.DB.prepare(`SELECT s.seller_id,s.name,s.rating,s.review_count,s.product_count,s.invoice,p.mode
-        FROM sellers s
-        LEFT JOIN (
-          SELECT seller_name,
+      const rows=await env.DB.prepare(`
+        WITH option_base AS (
+          SELECT
             CASE
-              WHEN sum(CASE WHEN mode='blocked' THEN 1 ELSE 0 END)>0 THEN 'blocked'
-              WHEN sum(CASE WHEN mode='preferred' THEN 1 ELSE 0 END)>0 THEN 'preferred'
-              ELSE NULL
-            END AS mode
-          FROM seller_preferences
-          GROUP BY seller_name
-        ) p ON p.seller_name=s.name
-        ORDER BY CASE p.mode WHEN 'preferred' THEN 0 WHEN 'blocked' THEN 2 ELSE 1 END,s.rating DESC,s.name
-        LIMIT 1000`).all();
-      return reply({ok:true,sellers:rows.results});
+              WHEN json_extract(o.raw,'$.seller_id') IS NOT NULL AND trim(json_extract(o.raw,'$.seller_id'))<>''
+                THEN 'sid:'||json_extract(o.raw,'$.seller_id')
+              ELSE 'name:'||lower(trim(o.seller_name))
+            END AS pref_key,
+            trim(o.seller_name) AS option_name,
+            o.sku,o.rating,json_extract(o.raw,'$.rating_qty') AS review_count,o.last_seen,
+            CASE WHEN trim(o.seller_name)='' OR trim(o.seller_name)='-' OR o.seller_name LIKE '%*%' THEN 1 ELSE 0 END AS masked
+          FROM seller_options o
+          JOIN products active_product ON active_product.sku=o.sku AND active_product.active=1
+        ),
+        current_names AS (
+          SELECT
+            CASE
+              WHEN json_extract(o.raw,'$.seller_id') IS NOT NULL AND trim(json_extract(o.raw,'$.seller_id'))<>''
+                THEN 'sid:'||json_extract(o.raw,'$.seller_id')
+              ELSE 'name:'||lower(trim(o.seller_name))
+            END AS pref_key,
+            trim(p.seller_name) AS full_name,
+            count(*) AS usage_count,
+            max(p.last_seen) AS last_seen
+          FROM products p
+          JOIN seller_options o
+            ON o.sku=p.sku
+           AND o.seller_id=json_extract(p.raw,'$.seller_sku_id')
+          WHERE p.active=1
+            AND trim(COALESCE(p.seller_name,''))<>''
+            AND trim(p.seller_name)<>'-'
+            AND p.seller_name NOT LIKE '%*%'
+          GROUP BY 1,2
+        ),
+        current_name_rank AS (
+          SELECT pref_key,full_name,
+            row_number() OVER(PARTITION BY pref_key ORDER BY usage_count DESC,last_seen DESC,full_name COLLATE NOCASE) AS rn
+          FROM current_names
+        ),
+        option_names AS (
+          SELECT pref_key,option_name,count(*) AS seen_count,max(last_seen) AS last_seen
+          FROM option_base
+          WHERE masked=0
+          GROUP BY pref_key,option_name
+        ),
+        option_name_rank AS (
+          SELECT pref_key,option_name,
+            row_number() OVER(PARTITION BY pref_key ORDER BY seen_count DESC,last_seen DESC,option_name COLLATE NOCASE) AS rn
+          FROM option_names
+        ),
+        directory_name_rank AS (
+          SELECT 'sid:'||seller_id AS pref_key,name,
+            row_number() OVER(PARTITION BY seller_id ORDER BY last_seen DESC) AS rn
+          FROM sellers
+          WHERE raw<>'{}'
+            AND trim(COALESCE(name,''))<>''
+            AND trim(name)<>'-'
+            AND name NOT LIKE '%*%'
+        ),
+        metric_rank AS (
+          SELECT pref_key,rating,review_count,
+            row_number() OVER(
+              PARTITION BY pref_key
+              ORDER BY CASE WHEN rating IS NULL THEN 1 ELSE 0 END,last_seen DESC
+            ) AS rn
+          FROM option_base
+        ),
+        grouped AS (
+          SELECT pref_key,count(DISTINCT sku) AS product_count,min(option_name) AS fallback_name
+          FROM option_base
+          GROUP BY pref_key
+        ),
+        resolved AS (
+          SELECT
+            g.pref_key,
+            COALESCE(c.full_name,d.name,o.option_name) AS resolved_name,
+            g.fallback_name,
+            g.product_count,
+            m.rating,m.review_count
+          FROM grouped g
+          LEFT JOIN current_name_rank c ON c.pref_key=g.pref_key AND c.rn=1
+          LEFT JOIN directory_name_rank d ON d.pref_key=g.pref_key AND d.rn=1
+          LEFT JOIN option_name_rank o ON o.pref_key=g.pref_key AND o.rn=1
+          LEFT JOIN metric_rank m ON m.pref_key=g.pref_key AND m.rn=1
+        )
+        SELECT
+          r.pref_key AS preference_key,
+          CASE
+            WHEN r.resolved_name IS NOT NULL THEN r.resolved_name
+            WHEN r.pref_key LIKE 'sid:%' THEN 'Seller '||substr(r.pref_key,5)
+            ELSE 'Seller belum teridentifikasi'
+          END AS name,
+          CASE WHEN r.resolved_name IS NULL THEN 1 ELSE 0 END AS unresolved,
+          CASE WHEN r.pref_key LIKE 'sid:%' THEN substr(r.pref_key,5) ELSE NULL END AS seller_account_id,
+          r.rating,r.review_count,r.product_count,
+          CASE
+            WHEN EXISTS(
+              SELECT 1 FROM seller_preferences sp
+              WHERE sp.mode='blocked'
+                AND (lower(sp.seller_name)=lower(r.pref_key) OR (r.resolved_name IS NOT NULL AND lower(sp.seller_name)=lower(r.resolved_name)))
+            ) THEN 'blocked'
+            WHEN EXISTS(
+              SELECT 1 FROM seller_preferences sp
+              WHERE sp.mode='preferred'
+                AND (lower(sp.seller_name)=lower(r.pref_key) OR (r.resolved_name IS NOT NULL AND lower(sp.seller_name)=lower(r.resolved_name)))
+            ) THEN 'preferred'
+            ELSE NULL
+          END AS mode
+        FROM resolved r
+        WHERE r.pref_key<>'name:' AND trim(COALESCE(r.fallback_name,''))<>''
+        ORDER BY unresolved ASC,
+          CASE mode WHEN 'preferred' THEN 0 WHEN 'blocked' THEN 2 ELSE 1 END,
+          rating DESC,name COLLATE NOCASE
+        LIMIT 1000
+      `).all();
+      const sellers=rows.results||[];
+      return reply({
+        ok:true,
+        sellers,
+        summary:{
+          total:sellers.length,
+          named:sellers.filter(x=>!Number(x.unresolved)).length,
+          unresolved:sellers.filter(x=>Number(x.unresolved)).length
+        }
+      });
     }
     const pref=path.match(/^\/api\/sellers\/([^/]+)\/preference$/);
     if(method==="POST"&&pref) {
-      const body=await getJson(req), name=decodeURIComponent(pref[1]);
+      const body=await getJson(req), key=decodeURIComponent(pref[1]),label=str(body.name);
       if(!["preferred","blocked","none"].includes(body.mode))throw Error("Pilihan tidak valid.");
-      await env.DB.prepare("DELETE FROM seller_preferences WHERE seller_name=?").bind(name).run();
-      if(body.mode!=="none") await env.DB.prepare("INSERT INTO seller_preferences(seller_name,mode) VALUES(?,?)").bind(name,body.mode).run();
+      if(!key||key.length>180)throw Error("Identitas seller tidak valid.");
+      const deleteKeys=[key];
+      if(label&&label.length<=160)deleteKeys.push(label);
+      await env.DB.prepare("DELETE FROM seller_preferences WHERE lower(seller_name) IN ("+deleteKeys.map(()=>"?").join(",")+")").bind(...deleteKeys.map(x=>x.toLowerCase())).run();
+      if(body.mode!=="none") await env.DB.prepare("INSERT INTO seller_preferences(seller_name,mode) VALUES(?,?)").bind(key,body.mode).run();
       await markAttentionDirty(env);
-      return reply({ok:true,mode:body.mode});
+      return reply({ok:true,mode:body.mode,key});
     }
     if(method==="GET"&&path==="/api/rules") {
       const [rows,categories,brands,types,products]=await Promise.all([

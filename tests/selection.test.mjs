@@ -657,6 +657,40 @@ test("seller preference API supports normal, preferred, and blocked modes",()=>{
   assert.match(source,/mode='blocked'/);
 });
 
+
+test("seller panel aggregates live candidate identities instead of the empty legacy sellers cache",()=>{
+  const block=source.slice(source.indexOf('if(method==="GET"&&path==="/api/sellers")'),source.indexOf('const pref=path.match',source.indexOf('if(method==="GET"&&path==="/api/sellers")')));
+  assert.match(block,/WITH option_base AS/);
+  assert.match(block,/json_extract\(o\.raw,'\$\.seller_id'\)/);
+  assert.match(block,/count\(DISTINCT sku\) AS product_count/);
+  assert.match(block,/json_extract\(o\.raw,'\$\.rating_qty'\) AS review_count/);
+  assert.match(block,/preference_key/);
+  assert.match(block,/unresolved/);
+  assert.doesNotMatch(block,/SELECT s\.seller_id,s\.name,s\.rating/);
+});
+
+test("seller preferences support stable Digiflazz account IDs even when candidate names are masked",()=>{
+  const product={max_price:20000};
+  const rows=[
+    {seller_id:"sku-a",seller_account_id:"account-a",seller_name:"AM***",price:10000,rating:4.8,review_count:"20+",stock:10,seller_status:1,sla:"H+0"},
+    {seller_id:"sku-b",seller_account_id:"account-b",seller_name:"AM***",price:10000,rating:4.8,review_count:"20+",stock:10,seller_status:1,sla:"H+0"}
+  ];
+  const preferred=rank(product,rows,[{seller_name:"sid:account-b",mode:"preferred"}],null,{minRating:4,minReviews:0,priceTolerancePercent:2},null);
+  assert.equal(preferred[0].seller_id,"sku-b");
+  const blocked=rank(product,rows,[{seller_name:"sid:account-a",mode:"blocked"}],null,{minRating:4,minReviews:0,priceTolerancePercent:2},null);
+  assert.equal(blocked.find(x=>x.seller_id==="sku-a").eligible,false);
+});
+
+test("seller ranking queries expose the stable seller account id from candidate raw data",()=>{
+  assert.match(source,/json_extract\(raw,'\$\.seller_id'\) AS seller_account_id/);
+  assert.match(source,/accountKey = str\(x\.seller_account_id\)/);
+});
+
+test("overview seller count comes from candidate seller identities",()=>{
+  assert.match(source,/count\(DISTINCT CASE WHEN json_extract\(o\.raw,'\$\.seller_id'\)/);
+  assert.doesNotMatch(source,/SELECT count\(\*\) total FROM sellers/);
+});
+
 test("ranking applies 4.5+ tier before fallback and Seller Prioritas inside the active tier",()=>{
   const product={max_price:20000};
   const rows=[
