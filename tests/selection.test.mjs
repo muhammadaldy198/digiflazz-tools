@@ -775,14 +775,16 @@ test("scan migration enforces a single running scan",()=>{
 });
 
 test("scan acquisition skips overlap and expires stale runs after five minutes",()=>{
-  const block=source.slice(source.indexOf("async function acquireScanRun"),source.indexOf("async function scan(",source.indexOf("async function acquireScanRun")));
+  const start=source.indexOf("async function acquireScanRun");
+  const block=source.slice(start,source.indexOf("const [catalog",start));
   assert.match(block,/started_at < datetime\('now','-5 minutes'\)/);
   assert.match(block,/WHERE status='running' ORDER BY id DESC LIMIT 1/);
   assert.match(block,/reason:"already_running"/);
 });
 
 test("full scan fetches catalog categories concurrently under a time budget",()=>{
-  const block=source.slice(source.indexOf("async function scan("),source.indexOf("function inCutoffWindow("));
+  const start=source.indexOf("function ensureScanBudget");
+  const block=source.slice(start,source.indexOf("function inCutoffWindow(",start));
   assert.match(block,/const deadlineMs=Date\.now\(\)\+90000/);
   assert.match(block,/Promise\.all\(categoryTargets\.map/);
   assert.match(block,/ensureScanBudget\(deadlineMs\)/);
