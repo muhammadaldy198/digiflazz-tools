@@ -22,6 +22,12 @@ test("seller filtering rejects blocked, expensive, and out of stock candidates",
   assert.ok(result.find(x => x.seller_name === "Costly").reasons.includes("Harga di atas batas"));
 });
 
+test("normalization accepts string one status values from Digiflazz",()=>{
+  const p=normalizeProduct({buyer_sku_code:"x1",product_name:"X 1",status:"1",status_sellerSku:"1",price:1000,max_price:1200});
+  assert.equal(p.active,1);
+  assert.equal(p.seller_active,1);
+});
+
 test("settings validate opt-in live switching and ignore removed global Max Price keys", () => {
   const current = { autoSwitch: false, dryRun: true };
   const next=validateSettings({ autoSwitch: true, dryRun: false, maxPriceOffset:1000, autoFillMaxPrice:true, preserveMaxPrice:false, priceCap:9999 }, current);
@@ -444,13 +450,13 @@ test("missing product Max Price is flagged and excluded from Auto Switch targets
 });
 
 
-test("overview counts missing per-product Max Price",()=>{
-  assert.match(source,/sum\(CASE WHEN p\.max_price<=0 THEN 1 ELSE 0 END\) missingMaxPrice/);
+test("overview counts missing per-product Max Price for active products",()=>{
+  assert.match(source,/sum\(CASE WHEN p\.active=1 AND p\.max_price<=0 THEN 1 ELSE 0 END\) missingMaxPrice/);
   assert.match(source,/missingMaxPrice:Number\(summary\?\.missingMaxPrice\)\|\|0/);
 });
 
-test("product API exposes missing Max Price filter",()=>{
-  assert.match(source,/status==="missing-max"\)where\+=" AND p\.max_price<=0"/);
+test("product API exposes active missing Max Price filter",()=>{
+  assert.match(source,/status==="missing-max"\)where\+=" AND p\.active=1 AND p\.max_price<=0"/);
 });
 
 test("cooldown is skipped instead of counted as failure",()=>{
@@ -692,6 +698,35 @@ test("empty seller refreshes still invalidate attention for recalculation",()=>{
   assert.match(block,/return \{refreshed,empty,failed,deferred,skus:refreshedSkus\}/);
 });
 
+
+test("SKU rename clears FK refresh state and preserves seller rejection policy on the new SKU",()=>{
+  const block=source.slice(source.indexOf("async function updateBuyerSku"),source.indexOf("async function setBuyerProductStatus"));
+  assert.match(block,/SELECT seller_id,seller_name,reason,rejected_at,retry_after,permanent FROM seller_rejections WHERE sku=\?/);
+  assert.match(block,/DELETE FROM quality_refresh_state WHERE sku=\?/);
+  assert.match(block,/DELETE FROM seller_rejections WHERE sku=\?/);
+  assert.match(block,/INSERT INTO seller_rejections\(sku,seller_id,seller_name,reason,rejected_at,retry_after,permanent\)/);
+  assert.ok(block.indexOf("DELETE FROM quality_refresh_state WHERE sku=?") < block.indexOf("UPDATE products SET sku=?"));
+});
+
+test("product deletion explicitly removes FK child state",()=>{
+  const block=source.slice(source.indexOf("async function deleteBuyerProduct"),source.indexOf("function changedProduct"));
+  assert.match(block,/DELETE FROM quality_refresh_state WHERE sku=\?/);
+  assert.match(block,/DELETE FROM seller_rejections WHERE sku=\?/);
+});
+
+test("failed manual or automatic seller saves invalidate attention cache immediately",()=>{
+  const block=source.slice(source.indexOf("async function switchSeller"),source.indexOf("async function autoSwitchBatch"));
+  const catchPos=block.lastIndexOf("catch(error)");
+  assert.ok(catchPos>=0);
+  assert.match(block.slice(catchPos),/await markAttentionDirty\(env,\[sku\]\)/);
+});
+
+test("missing Max Price metric and filter only include active products",()=>{
+  const summary=source.slice(source.indexOf("async function attentionSummary"),source.indexOf("async function refreshOptions"));
+  assert.match(summary,/p\.active=1 AND p\.max_price<=0/);
+  const api=source.slice(source.indexOf('if (method==="GET" && path==="/api/products")'),source.indexOf("const opt=path.match"));
+  assert.match(api,/status==="missing-max"\)where\+=" AND p\.active=1 AND p\.max_price<=0"/);
+});
 
 test("API keeps only health public and requires Cloudflare Access for every other route",()=>{
   const apiStart=source.indexOf("async function api(req, env, url)");
