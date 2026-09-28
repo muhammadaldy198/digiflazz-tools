@@ -1036,3 +1036,18 @@ test("cooldown UI explains emergency seller failures",()=>{
   assert.ok(uiSource.includes("Cooldown hanya menahan optimasi biasa"));
   assert.ok(uiSource.includes("Seller OFF, stok habis, cut-off"));
 });
+
+
+test("Ringkasan reports real seller candidate, rating, and SLA coverage",()=>{
+  assert.match(source,/optionProducts:Number\(quality\?\.optionProducts\)\|\|0/);
+  assert.match(source,/ratingKnown:Number\(quality\?\.ratingKnown\)\|\|0/);
+  assert.match(source,/slaKnown:Number\(quality\?\.slaKnown\)\|\|0/);
+  assert.match(source,/qualityKnown:Number\(quality\?\.qualityKnown\)\|\|0/);
+  assert.match(source,/count\(DISTINCT CASE WHEN o\.rating IS NOT NULL THEN p\.sku END\) ratingKnown/);
+  assert.match(source,/COALESCE\(TRIM\(o\.sla\),'\'\)<>''/);
+});
+
+test("Ringkasan seller total includes sellers discovered from product options",()=>{
+  assert.match(source,/SELECT seller_name AS name,rating FROM seller_options/);
+  assert.match(source,/ratedSellers:Number\(sellerCount\?\.rated\)\|\|0/);
+});
