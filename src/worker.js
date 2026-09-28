@@ -1608,130 +1608,51 @@ async function api(req, env, url) {
     const pending=path.match(/^\/api\/products\/([^/]+)\/reconcile$/);
     if(method==="POST"&&pending)return reply(await reconcile(env,decodeURIComponent(pending[1])));
     if(method==="GET"&&path==="/api/sellers") {
-      const rows=await env.DB.prepare(`
-        WITH option_base AS (
-          SELECT
-            CASE
-              WHEN json_extract(o.raw,'$.seller_id') IS NOT NULL AND trim(json_extract(o.raw,'$.seller_id'))<>''
-                THEN 'sid:'||json_extract(o.raw,'$.seller_id')
-              ELSE 'name:'||lower(trim(o.seller_name))
-            END AS pref_key,
-            trim(o.seller_name) AS option_name,
-            o.sku,o.rating,json_extract(o.raw,'$.rating_qty') AS review_count,o.last_seen,
-            CASE WHEN trim(o.seller_name)='' OR trim(o.seller_name)='-' OR o.seller_name LIKE '%*%' THEN 1 ELSE 0 END AS masked
-          FROM seller_options o
-          JOIN products active_product ON active_product.sku=o.sku AND active_product.active=1
-        ),
-        current_names AS (
-          SELECT
-            CASE
-              WHEN json_extract(o.raw,'$.seller_id') IS NOT NULL AND trim(json_extract(o.raw,'$.seller_id'))<>''
-                THEN 'sid:'||json_extract(o.raw,'$.seller_id')
-              ELSE 'name:'||lower(trim(o.seller_name))
-            END AS pref_key,
-            trim(p.seller_name) AS full_name,
-            count(*) AS usage_count,
-            max(p.last_seen) AS last_seen
-          FROM products p
-          JOIN seller_options o
-            ON o.sku=p.sku
-           AND o.seller_id=json_extract(p.raw,'$.seller_sku_id')
-          WHERE p.active=1
-            AND trim(COALESCE(p.seller_name,''))<>''
-            AND trim(p.seller_name)<>'-'
-            AND p.seller_name NOT LIKE '%*%'
-          GROUP BY 1,2
-        ),
-        current_name_rank AS (
-          SELECT pref_key,full_name,
-            row_number() OVER(PARTITION BY pref_key ORDER BY usage_count DESC,last_seen DESC,full_name COLLATE NOCASE) AS rn
-          FROM current_names
-        ),
-        option_names AS (
-          SELECT pref_key,option_name,count(*) AS seen_count,max(last_seen) AS last_seen
-          FROM option_base
-          WHERE masked=0
-          GROUP BY pref_key,option_name
-        ),
-        option_name_rank AS (
-          SELECT pref_key,option_name,
-            row_number() OVER(PARTITION BY pref_key ORDER BY seen_count DESC,last_seen DESC,option_name COLLATE NOCASE) AS rn
-          FROM option_names
-        ),
-        directory_name_rank AS (
-          SELECT 'sid:'||seller_id AS pref_key,name,
-            row_number() OVER(PARTITION BY seller_id ORDER BY last_seen DESC) AS rn
-          FROM sellers
-          WHERE raw<>'{}'
-            AND trim(COALESCE(name,''))<>''
-            AND trim(name)<>'-'
-            AND name NOT LIKE '%*%'
-        ),
-        metric_rank AS (
-          SELECT pref_key,rating,review_count,
-            row_number() OVER(
-              PARTITION BY pref_key
-              ORDER BY CASE WHEN rating IS NULL THEN 1 ELSE 0 END,last_seen DESC
-            ) AS rn
-          FROM option_base
-        ),
-        grouped AS (
-          SELECT pref_key,count(DISTINCT sku) AS product_count,min(option_name) AS fallback_name
-          FROM option_base
-          GROUP BY pref_key
-        ),
-        resolved AS (
-          SELECT
-            g.pref_key,
-            COALESCE(c.full_name,d.name,o.option_name) AS resolved_name,
-            g.fallback_name,
-            g.product_count,
-            m.rating,m.review_count
-          FROM grouped g
-          LEFT JOIN current_name_rank c ON c.pref_key=g.pref_key AND c.rn=1
-          LEFT JOIN directory_name_rank d ON d.pref_key=g.pref_key AND d.rn=1
-          LEFT JOIN option_name_rank o ON o.pref_key=g.pref_key AND o.rn=1
-          LEFT JOIN metric_rank m ON m.pref_key=g.pref_key AND m.rn=1
-        )
-        SELECT
-          r.pref_key AS preference_key,
-          CASE
-            WHEN r.resolved_name IS NOT NULL THEN r.resolved_name
-            WHEN r.pref_key LIKE 'sid:%' THEN 'Seller '||substr(r.pref_key,5)
-            ELSE 'Seller belum teridentifikasi'
-          END AS name,
-          CASE WHEN r.resolved_name IS NULL THEN 1 ELSE 0 END AS unresolved,
-          CASE WHEN r.pref_key LIKE 'sid:%' THEN substr(r.pref_key,5) ELSE NULL END AS seller_account_id,
-          r.rating,r.review_count,r.product_count,
-          CASE
-            WHEN EXISTS(
-              SELECT 1 FROM seller_preferences sp
-              WHERE sp.mode='blocked'
-                AND (lower(sp.seller_name)=lower(r.pref_key) OR (r.resolved_name IS NOT NULL AND lower(sp.seller_name)=lower(r.resolved_name)))
-            ) THEN 'blocked'
-            WHEN EXISTS(
-              SELECT 1 FROM seller_preferences sp
-              WHERE sp.mode='preferred'
-                AND (lower(sp.seller_name)=lower(r.pref_key) OR (r.resolved_name IS NOT NULL AND lower(sp.seller_name)=lower(r.resolved_name)))
-            ) THEN 'preferred'
-            ELSE NULL
-          END AS mode
-        FROM resolved r
-        WHERE r.pref_key<>'name:' AND trim(COALESCE(r.fallback_name,''))<>''
-        ORDER BY unresolved ASC,
-          CASE mode WHEN 'preferred' THEN 0 WHEN 'blocked' THEN 2 ELSE 1 END,
-          rating DESC,name COLLATE NOCASE
-        LIMIT 1000
-      `).all();
-      const sellers=rows.results||[];
+      let source="live",warning=null,endpoint="/api/v1/buyer/seller",rows=[];
+      try {
+        const directory=await sellerDirectoryLive(env);
+        rows=directory.sellers;
+        endpoint=directory.endpoint;
+        await cacheSellerDirectory(env,rows);
+      } catch(error) {
+        const cached=await env.DB.prepare("SELECT seller_id,name,rating,review_count,product_count,invoice,raw,last_seen FROM sellers WHERE raw<>'{}' ORDER BY name COLLATE NOCASE").all();
+        if(!cached.results.length)throw error;
+        source="cache";
+        warning="Data seller live Digiflazz tidak dapat dimuat ("+error.message+"). Menampilkan salinan terakhir yang sebelumnya diterima langsung dari Digiflazz.";
+        rows=cached.results.map(x=>({
+          seller_id:x.seller_id,
+          name:x.name,
+          rating:x.rating,
+          review_count:x.review_count,
+          product_count:x.product_count,
+          invoice:x.invoice,
+          raw:JSON.parse(x.raw||"{}"),
+          last_seen:x.last_seen
+        }));
+      }
+      const preferences=await env.DB.prepare("SELECT seller_name,mode FROM seller_preferences").all();
+      const prefMap=new Map((preferences.results||[]).map(x=>[str(x.seller_name).toLowerCase(),x.mode]));
+      const sellers=rows.map(x=>{
+        const key=str(x.seller_id)?"sid:"+str(x.seller_id):"name:"+str(x.name).toLowerCase();
+        return {
+          seller_id:x.seller_id,
+          preference_key:key,
+          name:x.name,
+          rating:x.rating,
+          review_count:x.review_count,
+          product_count:x.product_count,
+          invoice:x.invoice,
+          mode:prefMap.get(key.toLowerCase())||prefMap.get(str(x.name).toLowerCase())||null
+        };
+      });
       return reply({
         ok:true,
+        source,
+        endpoint,
+        warning,
         sellers,
-        summary:{
-          total:sellers.length,
-          named:sellers.filter(x=>!Number(x.unresolved)).length,
-          unresolved:sellers.filter(x=>Number(x.unresolved)).length
-        }
+        summary:{total:sellers.length},
+        fetchedAt:new Date().toISOString()
       });
     }
     const pref=path.match(/^\/api\/sellers\/([^/]+)\/preference$/);
