@@ -548,9 +548,36 @@ function matchingRuleForProduct(product,rules) {
   }).sort((a,b)=>(priority[a.scope_type]??9)-(priority[b.scope_type]??9)||Number(b.id||0)-Number(a.id||0))[0]||null;
 }
 function maxPriceBlockedReplacement(ranked,currentSellerId) {
-  return (ranked||[])
-    .filter(x=>String(x.seller_id)!==String(currentSellerId)&&Array.isArray(x.reasons)&&x.reasons.length===1&&x.reasons[0]==="Harga di atas batas")
-    .sort((a,b)=>Number(a.price)-Number(b.price))[0]||null;
+  const candidates=(ranked||[])
+    .filter(x=>String(x.seller_id)!==String(currentSellerId)&&Array.isArray(x.reasons)&&x.reasons.length===1&&x.reasons[0]==="Harga di atas batas");
+  if(!candidates.length)return null;
+  const cheapestBySla=new Map();
+  for(const x of candidates) {
+    const sla=Number(x.sla_days);
+    const previous=cheapestBySla.get(sla);
+    if(previous==null||Number(x.price)<previous)cheapestBySla.set(sla,Number(x.price));
+  }
+  const withinTolerance=x=>{
+    const reference=cheapestBySla.get(Number(x.sla_days));
+    const tolerance=bounded(x.price_tolerance_percent,0,20,2);
+    return reference!=null&&Number(x.price)<=reference*(1+tolerance/100)+1e-9;
+  };
+  return candidates.sort((a,b)=>{
+    const sla=Number(a.sla_days)-Number(b.sla_days);
+    if(sla)return sla;
+    const band=Number(withinTolerance(b))-Number(withinTolerance(a));
+    if(band)return band;
+    if(withinTolerance(a)&&withinTolerance(b)) {
+      return Number(b.rating||0)-Number(a.rating||0) ||
+        Number(b.review_value||0)-Number(a.review_value||0) ||
+        Number(a.price)-Number(b.price) ||
+        str(a.seller_name).localeCompare(str(b.seller_name),"id-ID",{sensitivity:"base",numeric:true});
+    }
+    return Number(a.price)-Number(b.price) ||
+      Number(b.rating||0)-Number(a.rating||0) ||
+      Number(b.review_value||0)-Number(a.review_value||0) ||
+      str(a.seller_name).localeCompare(str(b.seller_name),"id-ID",{sensitivity:"base",numeric:true});
+  })[0]||null;
 }
 const CURRENT_SELLER_ISSUE_REASONS=[
   "Seller belum dipilih",
@@ -1629,7 +1656,7 @@ async function api(req, env, url) {
     return failure(error, /sesi|Digiflazz mengembalikan|format katalog|tidak mengembalikan/i.test(error.message)?502:400);
   }
 }
-export { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct };
+export { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct, maxPriceBlockedReplacement };
 export default {
   async fetch(req,env) {
     const url=new URL(req.url);
