@@ -191,6 +191,15 @@ test("synced blocked seller list accepts arrays from backend",()=>{
   assert.equal(chooseSeller(options,product,{blocked:["Blocked Seller"]}).id,"alpha");
 });
 
+
+test("userscript matches preferred and blocked sellers by stable Digiflazz seller id",()=>{
+  const a={...candidate("sku-a","AM***",9000,4.8,"20+","H+0"),seller_id:"account-a"};
+  const b={...candidate("sku-b","AM***",9000,4.8,"20+","H+0"),seller_id:"account-b"};
+  assert.equal(chooseSeller([a,b],product,{preferred:["sid:account-b"]}).id,"sku-b");
+  assert.equal(chooseSeller([a,b],product,{blocked:["sid:account-a"]}).id,"sku-b");
+  assert.match(source,/function sellerKeys\(choice\)/);
+});
+
 test("old local ranking controls are no longer persisted by browser settings",()=>{
   assert.match(source,/const browser=\{enabled:get\("enabled"\)\.checked,saveMode:get\("mode"\)\.value,autoServiceCode:get\("code"\)\.checked\}/);
   assert.match(source,/Aturan seller tetap mengikuti dashboard/);
