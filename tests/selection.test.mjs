@@ -592,7 +592,7 @@ test("attention materialization excludes a recently rejected seller target",()=>
   assert.match(source,/op\.target_seller_id AS operation_target_seller_id/);
   assert.match(source,/op\.started_at AS operation_started_at/);
   assert.match(source,/Date\.now\(\)-rejectedAt<24\*3600000/);
-  assert.match(source,/policyOptions=rejectedId\?options\.filter/);
+  assert.match(source,/const policyOptions=options\.filter\(x=>\(!rejectedId\|\|String\(x\.seller_id\)!==rejectedId\)&&!persistentRejected\.has\(String\(x\.seller_id\)\)\)/);
 });
 
 test("materialized best candidate means an actual replacement seller",()=>{
@@ -603,7 +603,7 @@ test("materialized best candidate means an actual replacement seller",()=>{
 
 test("product detail materialization uses the same rejected-target and replacement policy",()=>{
   assert.match(source,/SELECT status,target_seller_id,started_at FROM switch_operations WHERE sku=\?/);
-  assert.match(source,/const policyOptions=rejectedId\?d\.options\.filter/);
+  assert.match(source,/const policyOptions=d\.options\.filter\(x=>\(!rejectedId\|\|String\(x\.seller_id\)!==rejectedId\)&&!persistentMap\.has\(String\(x\.seller_id\)\)\)/);
   assert.match(source,/const replacement=policyOptions\.find\(x=>x\.eligible&&String\(x\.seller_id\)!==currentId\)/);
 });
 
