@@ -910,6 +910,7 @@ async function attentionSummary(env, config) {
     env.DB.prepare(`SELECT
       count(*) products,
       sum(CASE WHEN p.active=1 THEN 1 ELSE 0 END) activeProducts,
+      sum(CASE WHEN p.active=0 THEN 1 ELSE 0 END) inactiveProducts,
       sum(CASE WHEN p.active=1 AND p.max_price<=0 THEN 1 ELSE 0 END) missingMaxPrice,
       sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 THEN 1 ELSE 0 END) issues,
       sum(CASE WHEN a.dirty=0 AND a.operational_issue=1 THEN 1 ELSE 0 END) operational,
@@ -919,7 +920,12 @@ async function attentionSummary(env, config) {
       sum(CASE WHEN a.sku IS NULL OR a.dirty=1 THEN 1 ELSE 0 END) attentionPending,
       sum(CASE WHEN a.dirty=0 THEN 1 ELSE 0 END) attentionFresh
     FROM products p LEFT JOIN product_attention a ON a.sku=p.sku`).first(),
-    env.DB.prepare("SELECT count(DISTINCT o.sku) total FROM seller_options o JOIN products p ON p.sku=o.sku WHERE p.active=1").first(),
+    env.DB.prepare(`SELECT
+      count(DISTINCT CASE WHEN o.sku IS NOT NULL THEN p.sku END) optionProducts,
+      count(DISTINCT CASE WHEN o.rating IS NOT NULL THEN p.sku END) ratingKnown,
+      count(DISTINCT CASE WHEN COALESCE(TRIM(o.sla),'')<>'' THEN p.sku END) slaKnown,
+      count(DISTINCT CASE WHEN o.rating IS NOT NULL AND COALESCE(TRIM(o.sla),'')<>'' THEN p.sku END) qualityKnown
+      FROM products p LEFT JOIN seller_options o ON o.sku=p.sku WHERE p.active=1`).first(),
     actionableAttentionCount(env,config),
     env.DB.prepare(`SELECT
       sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json LIKE ? AND NOT ${CURRENT_SELLER_ISSUE_SQL} THEN 1 ELSE 0 END) maxPriceBlocked,
@@ -935,10 +941,14 @@ async function attentionSummary(env, config) {
   return {
     products:Number(summary?.products)||0,
     activeProducts:Number(summary?.activeProducts)||0,
+    inactiveProducts:Number(summary?.inactiveProducts)||0,
     missingMaxPrice:Number(summary?.missingMaxPrice)||0,
     issues:Number(summary?.issues)||0,
     autoSwitchReady:autoReady,
-    qualityKnown:Number(quality?.total)||0,
+    optionProducts:Number(quality?.optionProducts)||0,
+    ratingKnown:Number(quality?.ratingKnown)||0,
+    slaKnown:Number(quality?.slaKnown)||0,
+    qualityKnown:Number(quality?.qualityKnown)||0,
     attentionFresh:Number(summary?.attentionFresh)||0,
     attentionPending:Number(summary?.attentionPending)||0,
     attentionStateBreakdown:{
@@ -1356,12 +1366,19 @@ async function api(req, env, url) {
       const cfg=await settings(env);
       const [c, counts, sellerCount, last, events, verified]=await Promise.all([
         conn(env),attentionSummary(env,cfg),
-        env.DB.prepare("SELECT count(*) total FROM sellers").first(),
+        env.DB.prepare(`SELECT
+          count(DISTINCT name) total,
+          count(DISTINCT CASE WHEN rating IS NOT NULL THEN name END) rated
+          FROM (
+            SELECT name,rating FROM sellers WHERE COALESCE(TRIM(name),'')<>''
+            UNION ALL
+            SELECT seller_name AS name,rating FROM seller_options WHERE COALESCE(TRIM(seller_name),'')<>''
+          )`).first(),
         env.DB.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").first(),
         env.DB.prepare("SELECT id,level,kind,sku,message,created_at FROM events ORDER BY id DESC LIMIT 8").all(),
         env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first()
       ]);
-      return reply({ok:true,connection:{connected:!!c,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at},settings:cfg,counts:{...counts,sellers:Number(sellerCount?.total)||0},lastScan:last,events:events.results,liveSwitchAvailable:!!verified});
+      return reply({ok:true,connection:{connected:!!c,lastTestStatus:c?.last_test_status,lastTestAt:c?.last_test_at},settings:cfg,counts:{...counts,sellers:Number(sellerCount?.total)||0,ratedSellers:Number(sellerCount?.rated)||0},lastScan:last,events:events.results,liveSwitchAvailable:!!verified});
     }
     if (method==="GET" && path==="/api/connection/status") {
       const c=await conn(env);
