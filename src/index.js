@@ -23,7 +23,7 @@ function bounded(value, min, max, fallback = min) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
 }
-function bool(v) { return v === true || v === 1 || v === "true"; }
+function bool(v) { return v === true || v === 1 || v === "true" || v === "1"; }
 function str(v) { return String(v ?? "").trim(); }
 function domainAllowed(host) { return host.toLowerCase() === "member.digiflazz.com"; }
 function hostUrl(value) {
@@ -861,7 +861,7 @@ async function attentionSummary(env, config) {
     env.DB.prepare(`SELECT
       count(*) products,
       sum(CASE WHEN p.active=1 THEN 1 ELSE 0 END) activeProducts,
-      sum(CASE WHEN p.max_price<=0 THEN 1 ELSE 0 END) missingMaxPrice,
+      sum(CASE WHEN p.active=1 AND p.max_price<=0 THEN 1 ELSE 0 END) missingMaxPrice,
       sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 THEN 1 ELSE 0 END) issues,
       sum(CASE WHEN a.dirty=0 AND a.operational_issue=1 THEN 1 ELSE 0 END) operational,
       sum(CASE WHEN a.dirty=0 AND a.quality_issue=1 THEN 1 ELSE 0 END) quality,
@@ -1031,18 +1031,23 @@ async function updateBuyerSku(env,oldSku,newSku) {
   const current=await freshProduct(env,oldSku);
   const remoteDuplicate=await findProductBySku(env,newSku);
   if(remoteDuplicate&&String(remoteDuplicate.id)!==String(current.id))throw Error("SKU "+newSku+" sudah dipakai di Digiflazz.");
+  const rejectionRows=await env.DB.prepare("SELECT seller_id,seller_name,reason,rejected_at,retry_after,permanent FROM seller_rejections WHERE sku=?").bind(oldSku).all();
   await remoteSave(env,{...current,code:newSku,change:true});
   const verified=await findProductBySku(env,newSku);
   if(!verified||String(verified.id)!==String(current.id))throw Error("Perubahan SKU belum terkonfirmasi di Digiflazz. Jangan ulangi sebelum memeriksa produk.");
   const normalized=normalizeProduct(verified);
   await env.DB.batch([
+    // Delete FK children before changing the parent primary key. Quality state is intentionally reset.
     env.DB.prepare("DELETE FROM product_attention WHERE sku=?").bind(oldSku),
+    env.DB.prepare("DELETE FROM quality_refresh_state WHERE sku=?").bind(oldSku),
+    env.DB.prepare("DELETE FROM seller_rejections WHERE sku=?").bind(oldSku),
     env.DB.prepare("UPDATE products SET sku=?,raw=?,active=?,seller_active=?,price=?,max_price=?,stock=?,unlimited_stock=?,nominal_value=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(newSku,JSON.stringify(verified),normalized.active,normalized.seller_active,normalized.price,normalized.max_price,normalized.stock,normalized.unlimited_stock,Number.isFinite(productNominalValue(normalized))?productNominalValue(normalized):null,oldSku),
     env.DB.prepare("UPDATE seller_options SET sku=? WHERE sku=?").bind(newSku,oldSku),
     env.DB.prepare("UPDATE product_locks SET buyer_sku_code=? WHERE buyer_sku_code=?").bind(newSku,oldSku),
     env.DB.prepare("UPDATE zone_assignments SET sku=? WHERE sku=?").bind(newSku,oldSku),
     env.DB.prepare("UPDATE switch_operations SET sku=? WHERE sku=?").bind(newSku,oldSku),
     env.DB.prepare("UPDATE seller_rules SET scope_value=? WHERE scope_type='product' AND scope_value=?").bind(newSku,oldSku),
+    ...rejectionRows.results.map(r=>env.DB.prepare("INSERT INTO seller_rejections(sku,seller_id,seller_name,reason,rejected_at,retry_after,permanent) VALUES(?,?,?,?,?,?,?)").bind(newSku,r.seller_id,r.seller_name,r.reason,r.rejected_at,r.retry_after,r.permanent)),
     env.DB.prepare("INSERT OR REPLACE INTO product_attention(sku,dirty,updated_at) VALUES(?,1,CURRENT_TIMESTAMP)").bind(newSku)
   ]);
   await log(env,"INFO","product-sku","SKU Digiflazz diubah: "+oldSku+" → "+newSku,newSku);
@@ -1070,6 +1075,8 @@ async function deleteBuyerProduct(env,sku) {
   if(after&&String(after.id)===String(current.id))throw Error("Penghapusan belum terkonfirmasi di Digiflazz. Jangan ulangi sebelum memeriksa produk.");
   await env.DB.batch([
     env.DB.prepare("DELETE FROM product_attention WHERE sku=?").bind(sku),
+    env.DB.prepare("DELETE FROM quality_refresh_state WHERE sku=?").bind(sku),
+    env.DB.prepare("DELETE FROM seller_rejections WHERE sku=?").bind(sku),
     env.DB.prepare("DELETE FROM seller_options WHERE sku=?").bind(sku),
     env.DB.prepare("DELETE FROM product_locks WHERE buyer_sku_code=?").bind(sku),
     env.DB.prepare("DELETE FROM zone_assignments WHERE sku=?").bind(sku),
@@ -1148,6 +1155,7 @@ async function switchSeller(env, sku, sellerId, reason, preparedSelection = null
       statements.push(env.DB.prepare("INSERT INTO seller_rejections(sku,seller_id,seller_name,reason,permanent,retry_after,rejected_at) VALUES(?,?,?,?,1,NULL,CURRENT_TIMESTAMP) ON CONFLICT(sku,seller_id) DO UPDATE SET seller_name=excluded.seller_name,reason=excluded.reason,permanent=1,retry_after=NULL,rejected_at=CURRENT_TIMESTAMP").bind(sku,sellerId,candidate.seller_name,str(error.detail||error.message).slice(0,300)));
     }
     await env.DB.batch(statements);
+    await markAttentionDirty(env,[sku]);
     await log(env,"ERROR","switch",error.message+(error?.policyBlock===true?" Seller ini diblokir dari Auto Switch sampai berhasil dicoba manual setelah persyaratan akun dibereskan.":status==="error"?" Target ditandai gagal; Auto Switch tidak mengulang seller ini selama 24 jam.":" Hasil belum pasti; tidak diulang otomatis."),sku);
     throw error;
   }
@@ -1352,7 +1360,7 @@ async function api(req, env, url) {
         where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ? AND NOT "+CURRENT_SELLER_ISSUE_SQL;
         args.push(maxBlockPattern);
       }
-      else if(status==="missing-max")where+=" AND p.max_price<=0";
+      else if(status==="missing-max")where+=" AND p.active=1 AND p.max_price<=0";
       else if(status==="locked")where+=" AND l.buyer_sku_code IS NOT NULL";
       else if(status==="active")where+=" AND p.active=1";
       else if(status==="inactive")where+=" AND p.active=0";
