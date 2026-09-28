@@ -303,10 +303,10 @@
     async function action(a,el) {
       if(a==="scan-now"){toast("Memindai katalog…");const d=await write("/api/scan");if(d.skipped){toast("Scan lain masih berjalan"+(d.startedAt?" sejak "+fmt(d.startedAt):"")+". Tunggu sampai selesai.");return render()}toast(d.total+" produk dipindai; "+d.issues+" perlu perhatian; "+(d.qualityRefreshed||0)+" rating/SLA diperbarui.");return render()}
       if(a==="manual-test"){
-        const d=await api("/api/products?"+new URLSearchParams({page:"1",q:"",status:"issues"}));
+        const d=await api("/api/products?"+new URLSearchParams({page:"1",q:"",status:"actionable"}));
         const first=d.products?.[0];
-        if(!first)throw Error("Tidak ada produk bermasalah untuk dites.");
-        toast("Membuka kandidat seller untuk "+first.sku+"…");
+        if(!first)throw Error("Belum ada SKU dengan kandidat seller yang benar-benar siap dipindahkan. Periksa Masalah seller dan Max Price terlebih dahulu.");
+        toast("Membuka kandidat seller siap pindah untuk "+first.sku+"…");
         return product(first.sku);
       }
       if(a==="toggle-auto"){
