@@ -129,21 +129,30 @@
     function feed(rows) {return rows?.length?'<div class="feed">'+rows.map(x=>'<div class="feed-line"><span class="feed-time">'+fmt(x.created_at)+'</span><span class="feed-msg"><b class="pill '+esc(x.level)+'">'+esc(x.level)+'</b>'+esc(x.kind?x.kind+" · ":"")+esc(x.sku?x.sku+" · ":"")+esc(x.message)+'</span></div>').join("")+'</div>':'<div class="empty">Belum ada aktivitas.</div>'}
     async function overview() {
       const d=await bootstrap(),scan=d.lastScan,issues=d.counts.issues;
+      const active=Number(d.counts.activeProducts||0);
+      const inactive=Number(d.counts.inactiveProducts??Math.max(0,Number(d.counts.products||0)-active));
+      const ratedSellers=Number(d.counts.ratedSellers||0);
+      const unratedSellers=Math.max(0,Number(d.counts.sellers||0)-ratedSellers);
+      const scanStatus=scan?.status||"belum pernah";
+      const scanTone=scanStatus==="success"?"good":scanStatus==="error"?"bad":"warn";
       $("content").innerHTML=
         '<div class="grid">'+
-          metric("Koneksi",d.connection.connected?"Aktif":"Belum aktif",d.connection.lastTestStatus?"HTTP "+d.connection.lastTestStatus:"Sesi terenkripsi di D1")+
-          metric("Produk",d.counts.products,"SKU hasil scan")+
+          metric("Koneksi",d.connection.connected?"Aktif":"Belum aktif",d.connection.lastTestStatus?"Uji terakhir HTTP "+d.connection.lastTestStatus:"Belum ada hasil uji sesi")+
+          metric("Produk",d.counts.products,active+" aktif · "+inactive+" nonaktif")+
+          metric("Seller",d.counts.sellers,ratedSellers+" punya rating · "+unratedSellers+" belum ada rating")+
+          metric("Rating & SLA",(d.counts.qualityKnown||0)+" / "+active,"Rating "+(d.counts.ratingKnown||0)+" · SLA "+(d.counts.slaKnown||0)+" · kandidat "+(d.counts.optionProducts||0))+
           metric("Perlu perhatian",issues,(issues?("Masalah seller saat ini "+(d.counts.attentionStateBreakdown?.currentSeller||0)+" · Tanpa kandidat "+(d.counts.attentionStateBreakdown?.tanpaKandidat||0)+" · Terhalang Max Price "+(d.counts.attentionStateBreakdown?.maxPrice||0)+" · Cooldown "+(d.counts.attentionStateBreakdown?.cooldown||0)):"Tidak ada yang terdeteksi")+(d.counts.attentionPending?" · "+d.counts.attentionPending+" menunggu evaluasi":""),"goto-issues")+
           metric("Siap Auto Switch",d.counts.autoSwitchReady||0,(d.counts.autoSwitchReady?"Punya kandidat pengganti · cooldown & operasi pending sudah disaring":"Belum ada SKU yang siap dipindahkan otomatis"),"goto-actionable")+
-          metric("Max Price kosong",d.counts.missingMaxPrice||0,(d.counts.missingMaxPrice?"Auto Switch diblokir sampai Max Price produk diisi":"Semua produk sudah punya Max Price"),"goto-missing-max")+
-          metric("Seller",d.counts.sellers,"Terdata di katalog")+
+          metric("Max Price kosong",d.counts.missingMaxPrice||0,(d.counts.missingMaxPrice?"Auto Switch diblokir sampai Max Price produk diisi":"Semua produk aktif sudah punya Max Price"),"goto-missing-max")+
+          metric("Menunggu evaluasi",d.counts.attentionPending||0,d.counts.attentionPending?"Cache perhatian belum selesai dihitung":"Semua cache perhatian sudah siap")+
         '</div>'+
         '<section class="section grid two">'+
-          '<div class="card"><div class="section-head"><h2>Monitor</h2>'+badge(d.settings.scanEnabled?"Aktif":"Berhenti",d.settings.scanEnabled?"good":"")+'</div>'+
+          '<div class="card"><div class="section-head"><h2>Monitor</h2>'+badge(d.settings.scanEnabled?"Aktif":"Berhenti",d.settings.scanEnabled?"good":"warn")+'</div>'+
             '<p class="sub">Pemindaian berjalan lewat Cloudflare Cron saat diaktifkan. Interval '+esc(d.settings.scanIntervalMinutes)+' menit.</p>'+
             '<div class="controls" style="margin-top:16px">'+button(d.settings.scanEnabled?"Hentikan monitor":"Mulai monitor","monitor","primary")+button("Pindai sekali","scan-now")+'</div>'+
-            '<p class="hint">Scan terakhir: '+(scan?fmt(scan.finished_at)+" · "+esc(scan.status)+" · "+esc(scan.total)+" produk":"belum pernah")+'</p>'+
-            '<p class="hint">Cakupan rating/SLA: <strong>'+esc(d.counts.qualityKnown)+' / '+esc(d.counts.activeProducts)+'</strong> produk aktif sudah punya data kandidat seller.</p>'+
+            '<div class="row"><span>Scan terakhir</span><span>'+badge(scanStatus,scanTone)+'</span></div>'+
+            '<p class="hint">'+(scan?fmt(scan.finished_at||scan.started_at)+" · "+esc(scan.total||0)+" produk · "+esc(scan.message||"tanpa pesan"):"Belum pernah ada scan.")+'</p>'+
+            '<p class="hint">Cakupan kandidat seller: <strong>'+esc(d.counts.optionProducts||0)+' / '+esc(active)+'</strong> produk aktif · rating <strong>'+esc(d.counts.ratingKnown||0)+'</strong> · SLA <strong>'+esc(d.counts.slaKnown||0)+'</strong> · rating+SLA lengkap <strong>'+esc(d.counts.qualityKnown||0)+'</strong>.</p>'+
             '<p class="hint">Cache perhatian: <strong>'+esc(d.counts.attentionFresh)+' / '+esc(d.counts.products)+'</strong> siap'+(d.counts.attentionPending?' · '+esc(d.counts.attentionPending)+' menunggu evaluasi':"")+'. Ringkasan membaca cache ini, bukan seluruh kandidat seller setiap kali halaman dibuka.</p>'+
           '</div>'+
           '<div class="card"><div class="section-head"><h2>Auto Switch</h2>'+badge(d.settings.autoSwitch&&!d.settings.dryRun?"AKTIF":d.liveSwitchAvailable?"SIAP DIAKTIFKAN":"BELUM DIVERIFIKASI",d.settings.autoSwitch&&!d.settings.dryRun?"good":"warn")+'</div>'+
