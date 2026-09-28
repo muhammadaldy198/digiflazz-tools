@@ -695,7 +695,7 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
     const replacement=ranked.find(x=>x.eligible&&String(x.seller_id)!==String(row.current_seller_sku_id))||null;
     const maxPriceBlocked=!replacement?maxPriceBlockedReplacement(ranked,row.current_seller_sku_id):null;
     const attention_reasons=attentionReasons(row,config,new Date(),{ranked,current,best});
-    if(persistentRejected.size)attention_reasons.push("Kandidat tertentu diblokir Auto Switch setelah ditolak Digiflazz");
+    if(persistentRejected.size&&attention_reasons.length)attention_reasons.push("Kandidat tertentu diblokir Auto Switch setelah ditolak Digiflazz");
     if(maxPriceBlocked)attention_reasons.push("Kandidat lolos aturan tetapi di atas Max Price ("+Math.round(Number(maxPriceBlocked.price)||0)+")");
     return {
       ...row,
@@ -1361,7 +1361,7 @@ async function api(req, env, url) {
         const replacement=policyOptions.find(x=>x.eligible&&String(x.seller_id)!==currentId)||null;
         const maxPriceBlocked=!replacement?maxPriceBlockedReplacement(policyOptions,currentId):null;
         const attention=attentionReasons({...d.product,operation_status:op?.status,start_cut_off:raw.start_cut_off,end_cut_off:raw.end_cut_off,option_count:policyOptions.length,current_option_seller_id:current?.seller_id,current_rating:current?.rating,current_sla:current?.sla},d.config,new Date(),{ranked:policyOptions,current,best});
-        if(persistentMap.size)attention.push("Kandidat tertentu diblokir Auto Switch setelah ditolak Digiflazz");
+        if(persistentMap.size&&attention.length)attention.push("Kandidat tertentu diblokir Auto Switch setelah ditolak Digiflazz");
         if(maxPriceBlocked)attention.push("Kandidat lolos aturan tetapi di atas Max Price ("+Math.round(Number(maxPriceBlocked.price)||0)+")");
         const cached={...d.product,operation_status:op?.status,current_rating:current?.rating??null,current_sla:current?.sla??null,option_count:policyOptions.length,attention_reasons:attention,needs_attention:attention.length>0,nominal_value:productNominalValue(d.product),best_candidate_seller:replacement?.seller_name||null,best_candidate_price:replacement?.price??null,best_candidate_rating:replacement?.rating??null,best_candidate_sla:replacement?.sla_days??null,last_success_switch_at:lastSuccess?.last_success_switch_at||null};
         const product={...cached,raw:undefined,current_seller_sku_id:currentId,attention_dirty:false,locked:Boolean(d.product.locked)};
