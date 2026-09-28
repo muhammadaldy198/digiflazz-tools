@@ -127,9 +127,15 @@ async function remote(env, path, htmlRequest = false) {
   if (!row || !env.SESSION_ENCRYPTION_KEY) throw Error("Sesi Digiflazz belum terhubung.");
   const session = await unseal(row, env.SESSION_ENCRYPTION_KEY);
   const target = hostUrl("https://member.digiflazz.com" + path);
-  const headers = { ...session.headers, accept: htmlRequest ? "text/html,application/xhtml+xml" : "application/json" };
+  const headers = {
+    ...session.headers,
+    accept: htmlRequest ? "text/html,application/xhtml+xml" : "application/json",
+    origin:"https://member.digiflazz.com",
+    referer:"https://member.digiflazz.com/buyer-area"
+  };
   delete headers.host;
   if (htmlRequest) delete headers["x-requested-with"];
+  else headers["x-requested-with"] ||= "XMLHttpRequest";
   const res = await fetch(target, { method: "GET", headers, redirect: "manual", signal: AbortSignal.timeout(20000) });
   if (res.status === 401 || (res.status >= 300 && res.status < 400)) {
     const error=Error("Sesi Digiflazz kedaluwarsa atau perlu diperbarui (HTTP " + res.status + ").");
@@ -265,6 +271,51 @@ function normalizeSeller(x) {
     invoice: x.tax_invoice == null ? null : bool(x.tax_invoice) ? 1 : 0,
     raw: JSON.stringify(x).slice(0, 20000)
   };
+}
+function mirrorSeller(x) {
+  const sellerId=str(x.seller_id ?? x.id ?? x.company_id ?? x.company?.id);
+  const name=str(x.company_name ?? x.seller_name ?? x.name ?? x.company?.name);
+  if(!sellerId&&!name)return null;
+  return {
+    seller_id:sellerId||name,
+    name:name||sellerId,
+    rating:x.review_avg ?? x.rating ?? x.rating_avg ?? null,
+    review_count:x.rating_qty ?? x.review_count ?? x.reviews ?? x.total_review ?? x.total_reviews ?? null,
+    product_count:x.product_count ?? x.total_product ?? x.total_products ?? x.product_qty ?? x.products_count ?? null,
+    invoice:x.tax_invoice ?? x.invoice ?? x.faktur ?? null,
+    raw:x
+  };
+}
+async function sellerDirectoryLive(env) {
+  const row=await conn(env);
+  if(!row||!env.SESSION_ENCRYPTION_KEY)throw Error("Sesi Digiflazz belum terhubung.");
+  const session=await unseal(row,env.SESSION_ENCRYPTION_KEY);
+  let path="/api/v1/buyer/seller";
+  try {
+    const captured=new URL(session.url);
+    if(captured.hostname==="member.digiflazz.com"&&captured.pathname.startsWith("/api/v1/buyer/seller")) path=captured.pathname+captured.search;
+  } catch {}
+  const response=await remoteJson(env,path);
+  const list=listOf(response,["data.data","data.sellers","data","sellers","result.data","result"]);
+  if(!list)throw Error("Format data seller Digiflazz belum dikenali.");
+  const sellers=list.map(mirrorSeller).filter(Boolean);
+  if(list.length&&!sellers.length)throw Error("Data seller Digiflazz tidak memiliki identitas seller yang dikenali.");
+  return {sellers,endpoint:path};
+}
+async function cacheSellerDirectory(env,sellers) {
+  if(!sellers.length)return;
+  const stmts=sellers.map(x=>env.DB.prepare(
+    "INSERT INTO sellers(seller_id,name,rating,review_count,product_count,invoice,raw,last_seen) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP) "+
+    "ON CONFLICT(seller_id) DO UPDATE SET name=excluded.name,rating=excluded.rating,review_count=excluded.review_count,product_count=excluded.product_count,invoice=excluded.invoice,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP"
+  ).bind(
+    x.seller_id,x.name,
+    x.rating==null?null:x.rating,
+    x.review_count==null?null:x.review_count,
+    x.product_count==null?null:x.product_count,
+    x.invoice==null?null:(bool(x.invoice)?1:0),
+    JSON.stringify(x.raw).slice(0,20000)
+  ));
+  for(let i=0;i<stmts.length;i+=80)await env.DB.batch(stmts.slice(i,i+80));
 }
 async function log(env, level, kind, message, sku = null) {
   await env.DB.prepare("INSERT INTO events(level,kind,sku,message) VALUES(?,?,?,?)").bind(level, kind, sku, String(message).slice(0, 400)).run();
@@ -404,10 +455,8 @@ async function scan(env, reason = "manual") {
     const sellerRetry=await env.DB.prepare("SELECT value FROM app_settings WHERE key='seller_directory_retry_after'").first();
     if((!sellerRetry || Date.now()>=Date.parse(sellerRetry.value))&&Date.now()+22000<deadlineMs) {
       try {
-        const sd = await remoteJson(env, "/api/v1/buyer/seller");
-        const sellers = listOf(sd,["data.data","data.sellers","data","sellers","result.data","result"]) || [];
-        const stmts = sellers.map(normalizeSeller).filter(Boolean).map(x=>env.DB.prepare("INSERT INTO sellers(seller_id,name,rating,review_count,product_count,invoice,raw,last_seen) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(seller_id) DO UPDATE SET name=excluded.name,rating=excluded.rating,review_count=excluded.review_count,product_count=excluded.product_count,invoice=excluded.invoice,raw=excluded.raw,last_seen=CURRENT_TIMESTAMP").bind(x.seller_id,x.name,x.rating,x.review_count,x.product_count,x.invoice,x.raw));
-        for(let i=0;i<stmts.length;i+=80) await env.DB.batch(stmts.slice(i,i+80));
+        const directory=await sellerDirectoryLive(env);
+        await cacheSellerDirectory(env,directory.sellers);
         await env.DB.prepare("DELETE FROM app_settings WHERE key='seller_directory_retry_after'").run();
       } catch (error) {
         if(error?.status===403) {
@@ -417,8 +466,6 @@ async function scan(env, reason = "manual") {
         } else await log(env,"WARN","sellers",error.message);
       }
     }
-    const sellerStmts = [...new Set(products.map(x=>str(x.seller_name)).filter(name=>name&&name!=="-"&&!name.includes("*")))].map(name=>env.DB.prepare("INSERT INTO sellers(seller_id,name,raw) VALUES(?,?,?) ON CONFLICT(seller_id) DO NOTHING").bind(name,name,"{}"));
-    for (let i=0;i<sellerStmts.length;i+=80) await env.DB.batch(sellerStmts.slice(i,i+80));
     const cfg=await settings(env);
     const qualityRefresh=await refreshAttentionCoverage(env,cfg.attentionRefreshBatchSize,deadlineMs);
     if(qualityRefresh.skus?.length)await markAttentionDirty(env,qualityRefresh.skus);
