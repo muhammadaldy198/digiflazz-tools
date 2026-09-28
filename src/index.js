@@ -381,14 +381,20 @@ async function scan(env, reason = "manual") {
       for (let j=0;j<queries.length;j+=80) await env.DB.batch(queries.slice(j,j+80));
       if(chunkDirty.length)await markAttentionDirty(env,chunkDirty);
     }
-    const stale=await env.DB.prepare("SELECT sku FROM products WHERE last_seen < (SELECT started_at FROM scan_runs WHERE id=?)").bind(runId).all();
+    const stale=await env.DB.prepare("SELECT p.sku FROM products p WHERE p.last_seen < (SELECT started_at FROM scan_runs WHERE id=?) AND NOT EXISTS (SELECT 1 FROM switch_operations op WHERE op.sku=p.sku AND op.status IN ('pending','unknown'))").bind(runId).all();
     if(stale.results.length) {
       for(let i=0;i<stale.results.length;i+=75) {
         const skus=stale.results.slice(i,i+75).map(x=>x.sku);
         const marks=skus.map(()=>"?").join(",");
         await env.DB.batch([
-          env.DB.prepare("DELETE FROM seller_options WHERE sku IN ("+marks+")").bind(...skus),
           env.DB.prepare("DELETE FROM product_attention WHERE sku IN ("+marks+")").bind(...skus),
+          env.DB.prepare("DELETE FROM quality_refresh_state WHERE sku IN ("+marks+")").bind(...skus),
+          env.DB.prepare("DELETE FROM seller_rejections WHERE sku IN ("+marks+")").bind(...skus),
+          env.DB.prepare("DELETE FROM seller_options WHERE sku IN ("+marks+")").bind(...skus),
+          env.DB.prepare("DELETE FROM product_locks WHERE buyer_sku_code IN ("+marks+")").bind(...skus),
+          env.DB.prepare("DELETE FROM zone_assignments WHERE sku IN ("+marks+")").bind(...skus),
+          env.DB.prepare("DELETE FROM switch_operations WHERE sku IN ("+marks+")").bind(...skus),
+          env.DB.prepare("DELETE FROM seller_rules WHERE scope_type='product' AND scope_value IN ("+marks+")").bind(...skus),
           env.DB.prepare("DELETE FROM products WHERE sku IN ("+marks+")").bind(...skus)
         ]);
       }
