@@ -22,7 +22,7 @@
   const KEY = "digiTools.autoSeller.v1";
   const SYNC_KEY = "digiTools.syncedSellerConfig.v1";
   const BROWSER_DEFAULTS = {enabled:true,saveMode:"manual",autoServiceCode:true};
-  const RANK_DEFAULTS = {minRating:4,minReviews:0,priceTolerancePercent:2,blocked:[],syncedAt:null};
+  const RANK_DEFAULTS = {minRating:4,minReviews:0,priceTolerancePercent:2,preferred:[],blocked:[],syncedAt:null};
   const DEFAULTS = {...BROWSER_DEFAULTS,...RANK_DEFAULTS};
   const str = value => String(value ?? "").trim();
   const names = value => new Set((Array.isArray(value)?value:str(value).split(/[\n,]/)).map(x=>str(x).toLowerCase()).filter(Boolean));
@@ -71,9 +71,10 @@
     return a<b ? clock>=a&&clock<b : clock>=a||clock<b;
   }
   function chooseSeller(choices, product, options) {
-    const cfg={...DEFAULTS,...options}, blocked=names(cfg.blocked);
+    const cfg={...DEFAULTS,...options}, blocked=names(cfg.blocked), preferred=names(cfg.preferred);
     const cap=Number(product?.max_price)>0?Number(product.max_price):Infinity;
     const minRating=Math.max(4,Math.min(5,Number(cfg.minRating)||4));
+    const preferredRatingFloor=Math.max(4.5,minRating);
     const tolerance=Math.max(0,Math.min(20,Number(cfg.priceTolerancePercent)||0));
     const now=cfg.now?new Date(cfg.now):new Date();
     const valid=(Array.isArray(choices)?choices:[]).filter(x=>{
@@ -86,17 +87,27 @@
         reviewCount(x.rating_qty)>=Number(cfg.minReviews||0) &&
         (Number(x.stock)>0 || Number(x.unlimited_stock)===1) &&
         !cutoff;
-    }).map(x=>({...x,_sla:slaDays(x.seller_details?.sla),_reviews:reviewValue(x.rating_qty)}));
+    }).map(x=>({
+      ...x,
+      _sla:slaDays(x.seller_details?.sla),
+      _reviews:reviewValue(x.rating_qty),
+      _preferred:preferred.has(str(x.seller).toLowerCase()),
+      _ratingTier:Number(x.reviewAvg)>=preferredRatingFloor?1:0
+    }));
+    const activeRatingTier=valid.some(x=>x._ratingTier===1)?1:0;
     const cheapestBySla=new Map();
     for(const x of valid){
+      if(x._ratingTier!==activeRatingTier)continue;
       const old=cheapestBySla.get(x._sla);
       if(old==null||Number(x.price)<old)cheapestBySla.set(x._sla,Number(x.price));
     }
     for(const x of valid){
-      const ref=cheapestBySla.get(x._sla);
-      x._within=Number(x.price)<=ref*(1+tolerance/100)+1e-9;
+      const ref=x._ratingTier===activeRatingTier?cheapestBySla.get(x._sla):null;
+      x._within=ref!=null&&Number(x.price)<=ref*(1+tolerance/100)+1e-9;
     }
     return valid.sort((a,b)=>{
+      const tier=b._ratingTier-a._ratingTier;if(tier)return tier;
+      const priority=Number(b._preferred)-Number(a._preferred);if(priority)return priority;
       const sla=a._sla-b._sla;if(sla)return sla;
       const band=Number(b._within)-Number(a._within);if(band)return band;
       if(a._within&&b._within) {
@@ -317,6 +328,7 @@
       <div class="row"><span>Rating minimum</span><strong>${settings.minRating}</strong></div>
       <div class="row"><span>Ulasan minimum</span><strong>${settings.minReviews}</strong></div>
       <div class="row"><span>Toleransi harga</span><strong>${settings.priceTolerancePercent}%</strong></div>
+      <div class="row"><span>Seller prioritas</span><strong>${names(settings.preferred).size}</strong></div>
       <div class="row"><span>Seller diblokir</span><strong>${names(settings.blocked).size}</strong></div>
       <div class="row"><span>Sinkron terakhir</span><strong>${synced}</strong></div>
       <label><input id="enabled" type="checkbox"> Aktifkan pemilihan seller di halaman Digiflazz</label>
@@ -325,7 +337,7 @@
       <label><input id="code" type="checkbox"> Isi SKU otomatis</label>
       <p>Mobile Legends 5 Diamond → ML5, Free Fire 1000 Diamond → FF1000. SKU manual tidak ditimpa.</p>
       <button id="fill-all-codes" type="button">⚡ Isi semua SKU di halaman</button>
-      <div id="status" class="status" role="status">Auto Seller v2.0.1 aktif. Aturan production dipakai untuk ranking.</div>
+      <div id="status" class="status" role="status">Auto Seller v2.0.1 aktif. Tier rating 4,5–5 dipilih lebih dulu, lalu Seller Prioritas dan aturan production.</div>
     </div><button class="bubble" id="toggle" aria-label="Buka Auto Seller">⚡ Auto Seller</button>`;
     const get=id=>ui.getElementById(id);
     get("enabled").checked=settings.enabled;
