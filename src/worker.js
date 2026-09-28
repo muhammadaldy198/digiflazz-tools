@@ -269,10 +269,29 @@ function validateSettings(input, current) {
   }
   return next;
 }
+function ensureScanBudget(deadlineMs) {
+  if(Date.now()>=deadlineMs) throw Error("Scan melewati budget waktu aman 90 detik; dihentikan agar tidak menumpuk.");
+}
+async function acquireScanRun(env) {
+  await env.DB.prepare("UPDATE scan_runs SET status='error',finished_at=CURRENT_TIMESTAMP,message='Scan lama dianggap berhenti sebelum selesai.' WHERE status='running' AND started_at < datetime('now','-5 minutes')").run();
+  const active=await env.DB.prepare("SELECT id,started_at FROM scan_runs WHERE status='running' ORDER BY id DESC LIMIT 1").first();
+  if(active)return {runId:null,active};
+  try {
+    const created=await env.DB.prepare("INSERT INTO scan_runs(status) VALUES('running')").run();
+    return {runId:created.meta.last_row_id,active:null};
+  } catch(error) {
+    if(/constraint|unique/i.test(String(error?.message||""))) {
+      const current=await env.DB.prepare("SELECT id,started_at FROM scan_runs WHERE status='running' ORDER BY id DESC LIMIT 1").first();
+      return {runId:null,active:current||null};
+    }
+    throw error;
+  }
+}
 async function scan(env, reason = "manual") {
-  await env.DB.prepare("UPDATE scan_runs SET status='error',finished_at=CURRENT_TIMESTAMP,message='Invocation sebelumnya berhenti sebelum scan selesai.' WHERE status='running' AND started_at < datetime('now','-20 minutes')").run();
-  const created = await env.DB.prepare("INSERT INTO scan_runs(status) VALUES('running')").run();
-  const runId = created.meta.last_row_id;
+  const acquired=await acquireScanRun(env);
+  if(!acquired.runId)return {ok:true,skipped:true,reason:"already_running",activeRunId:acquired.active?.id||null,startedAt:acquired.active?.started_at||null};
+  const runId=acquired.runId;
+  const deadlineMs=Date.now()+90000;
   try {
     const [catalog,brandCatalog,typeCatalog] = await Promise.all([
       remoteJson(env, "/api/v1/buyer/product/category"),
@@ -284,20 +303,24 @@ async function scan(env, reason = "manual") {
     const brands=listOf(brandCatalog,["data","data.data","brands"])||[];
     const types=listOf(typeCatalog,["data","data.data","types"])||[];
     const metadata={categories:entityMap(categories),brands:entityMap(brands),types:entityMap(types)};
-    const items = [];
-    for (const category of categories) {
-      const id = entityId(category);
-      if (!id || !/^[a-zA-Z0-9_-]{1,80}$/.test(id)) continue;
-      const response = await remoteJson(env, "/api/v1/buyer/product/category/" + encodeURIComponent(id) + "/");
-      const members = listOf(response, ["data", "data.data", "products"]);
-      if (!members) throw Error("Format produk kategori " + id + " belum dikenali.");
+    const categoryTargets=categories.map(category=>({category,id:entityId(category)})).filter(x=>x.id&&/^[a-zA-Z0-9_-]{1,80}$/.test(x.id));
+    ensureScanBudget(deadlineMs);
+    const categoryPayloads=await Promise.all(categoryTargets.map(async ({category,id})=>{
+      const response=await remoteJson(env,"/api/v1/buyer/product/category/"+encodeURIComponent(id)+"/");
+      return {category,id,response};
+    }));
+    const items=[];
+    for(const {category,id,response} of categoryPayloads) {
+      const members=listOf(response,["data","data.data","products"]);
+      if(!members)throw Error("Format produk kategori "+id+" belum dikenali.");
       const categoryName=entityName(category)||metadata.categories.get(id)||id;
-      for (const member of members) items.push({member,categoryName});
+      for(const member of members)items.push({member,categoryName});
     }
     const products = items.map(x=>normalizeProduct(x.member,{...metadata,categoryName:x.categoryName})).filter(Boolean);
     if (items.length && !products.length) throw Error("Data produk tidak memiliki SKU yang dikenali.");
     let issues = 0;
     for (let i=0;i<products.length;i+=75) {
+      ensureScanBudget(deadlineMs);
       const chunk = products.slice(i,i+75);
       const old = await env.DB.prepare("SELECT sku,price,max_price,seller_name,seller_active,active,stock,unlimited_stock,raw FROM products WHERE sku IN (" + chunk.map(()=>"?").join(",") + ")").bind(...chunk.map(x=>x.sku)).all();
       const before = new Map(old.results.map(x=>[x.sku,x]));
@@ -346,8 +369,9 @@ async function scan(env, reason = "manual") {
       }
       await log(env,"INFO","catalog-cleanup",stale.results.length+" produk lama dihapus karena tidak ada lagi di katalog Digiflazz.");
     }
+    ensureScanBudget(deadlineMs);
     const sellerRetry=await env.DB.prepare("SELECT value FROM app_settings WHERE key='seller_directory_retry_after'").first();
-    if(!sellerRetry || Date.now()>=Date.parse(sellerRetry.value)) {
+    if((!sellerRetry || Date.now()>=Date.parse(sellerRetry.value))&&Date.now()+22000<deadlineMs) {
       try {
         const sd = await remoteJson(env, "/api/v1/buyer/seller");
         const sellers = listOf(sd,["data.data","data.sellers","data","sellers","result.data","result"]) || [];
@@ -365,7 +389,7 @@ async function scan(env, reason = "manual") {
     const sellerStmts = [...new Set(products.map(x=>x.seller_name).filter(Boolean))].map(name=>env.DB.prepare("INSERT INTO sellers(seller_id,name,raw) VALUES(?,?,?) ON CONFLICT(seller_id) DO NOTHING").bind(name,name,"{}"));
     for (let i=0;i<sellerStmts.length;i+=80) await env.DB.batch(sellerStmts.slice(i,i+80));
     const cfg=await settings(env);
-    const qualityRefresh=await refreshAttentionCoverage(env,cfg.attentionRefreshBatchSize);
+    const qualityRefresh=await refreshAttentionCoverage(env,cfg.attentionRefreshBatchSize,deadlineMs);
     if(qualityRefresh.skus?.length)await markAttentionDirty(env,qualityRefresh.skus);
     const cacheRefresh=await refreshAttentionCache(env,cfg,null,100);
     const summary=await attentionSummary(env,cfg);
@@ -836,7 +860,7 @@ async function refreshOptions(env, sku, productId) {
   for (let i=0;i<cmds.length;i+=80) await env.DB.batch(cmds.slice(i,i+80));
   return cmds.length;
 }
-async function refreshAttentionCoverage(env, requestedLimit=5) {
+async function refreshAttentionCoverage(env, requestedLimit=5, deadlineMs=0) {
   const limit=Math.trunc(bounded(requestedLimit,1,10,5));
   const rows=await env.DB.prepare(`
     SELECT p.sku,p.product_id,max(o.last_seen) AS quality_last_seen,q.next_retry_at,q.last_attempt
@@ -851,9 +875,14 @@ async function refreshAttentionCoverage(env, requestedLimit=5) {
       p.sku ASC
     LIMIT ?
   `).bind(limit).all();
-  let refreshed=0,empty=0,failed=0,lastError=null;
+  let refreshed=0,empty=0,failed=0,deferred=0,lastError=null;
   const refreshedSkus=[];
-  for(const row of rows.results) {
+  for(let index=0;index<rows.results.length;index++) {
+    const row=rows.results[index];
+    if(deadlineMs&&Date.now()+22000>=deadlineMs) {
+      deferred=rows.results.length-index;
+      break;
+    }
     try {
       const count=await refreshOptions(env,row.sku,row.product_id);
       if(count>0) {
@@ -872,8 +901,9 @@ async function refreshAttentionCoverage(env, requestedLimit=5) {
   }
   if(failed) await log(env,"WARN","attention-refresh",failed+" pembaruan rating/SLA gagal"+(lastError?": "+lastError.message:"")+".");
   if(empty) await log(env,"INFO","attention-refresh",empty+" produk tidak punya kandidat seller; dicoba lagi setelah 6 jam.");
+  if(deferred) await log(env,"INFO","attention-refresh",deferred+" produk ditunda karena budget waktu scan hampir habis.");
   if(refreshed) await log(env,"INFO","attention-refresh",refreshed+" produk diperbarui data rating/SLA-nya.");
-  return {refreshed,empty,failed,skus:refreshedSkus};
+  return {refreshed,empty,failed,deferred,skus:refreshedSkus};
 }
 async function rankedOptions(env, sku, refresh = true) {
   const entry = await env.DB.prepare("SELECT product_id FROM products WHERE sku=?").bind(sku).first();
@@ -1519,7 +1549,7 @@ export default {
   },
   async scheduled(event,env) {
     try {
-      await env.DB.prepare("UPDATE scan_runs SET status='error',finished_at=CURRENT_TIMESTAMP,message='Invocation sebelumnya berhenti sebelum scan selesai.' WHERE status='running' AND started_at < datetime('now','-20 minutes')").run();
+      await env.DB.prepare("UPDATE scan_runs SET status='error',finished_at=CURRENT_TIMESTAMP,message='Scan lama dianggap berhenti sebelum selesai.' WHERE status='running' AND started_at < datetime('now','-5 minutes')").run();
       const cfg=await settings(env);
       const last=await env.DB.prepare("SELECT finished_at FROM scan_runs WHERE status='success' ORDER BY id DESC LIMIT 1").first();
       const lastMs=last?.finished_at?Date.parse(last.finished_at.replace(" ","T")+"Z"):0;
