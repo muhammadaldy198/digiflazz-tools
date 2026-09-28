@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8").replace("const HTML = __HTML__;", "const HTML = '';");
 const scanMigration = readFileSync(new URL("../migrations/0007_scan_single_flight.sql", import.meta.url), "utf8");
+const uiSource = readFileSync(new URL("../src/ui.html", import.meta.url), "utf8");
 const { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct } = await import("data:text/javascript," + encodeURIComponent(source));
 
 test("seller filtering rejects blocked, expensive, and out of stock candidates", () => {
@@ -796,4 +797,13 @@ test("quality refresh defers work when scan budget is almost exhausted",()=>{
   assert.match(block,/deadlineMs&&Date\.now\(\)\+22000>=deadlineMs/);
   assert.match(block,/deferred=rows\.results\.length-index/);
   assert.match(block,/ditunda karena budget waktu scan hampir habis/);
+});
+
+
+test("product UI exposes quick attention filters backed by server status filters",()=>{
+  for(const status of ["issues","actionable","cooldown","blocked-max","no-candidate"]){
+    assert.ok(uiSource.includes("quick-status:"+status));
+  }
+  assert.ok(uiSource.includes('a.startsWith("quick-status:")'));
+  assert.ok(uiSource.includes('state.status=a.slice("quick-status:".length)'));
 });
