@@ -797,3 +797,12 @@ test("quality refresh defers work when scan budget is almost exhausted",()=>{
   assert.match(block,/deferred=rows\.results\.length-index/);
   assert.match(block,/ditunda karena budget waktu scan hampir habis/);
 });
+
+
+test("product UI exposes quick attention filters backed by server status filters",()=>{
+  for(const status of ["issues","actionable","cooldown","blocked-max","no-candidate"]){
+    assert.ok(html.includes("quick-status:"+status));
+  }
+  assert.ok(html.includes('a.startsWith("quick-status:")'));
+  assert.ok(html.includes('state.status=a.slice("quick-status:".length)'));
+});
