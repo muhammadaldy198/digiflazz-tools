@@ -48,14 +48,14 @@ test("browser helper accepts seller status when Digiflazz omits status_sellerSku
   assert.equal(chooseSeller([option],{...product,seller_sku_id:"none"},{minRating:4}).id,"nostatus");
 });
 
-test("seller priority is rating 4-5, then SLA, then cheapest price",()=>{
+test("seller rating tier 4.5-5 is preferred before fallback 4.0-4.49",()=>{
   const options=[
     candidate("bad","Bad",8000,3.99,"1000+","H+0","ip"),
     candidate("cheap-h1","Cheap H1",9000,4.9,"100+","SLA H+1, maks komplain H+7","ip"),
     candidate("h0-expensive","H0 Expensive",11000,4.2,"100+","SLA H+0, maks komplain H+7","api"),
     candidate("h0-cheap","H0 Cheap",10000,4.0,"100+","Max penyelesaian komplain H+0, max penerimaan komplain H+7","unknown")
   ];
-  assert.equal(chooseSeller(options,product,{minRating:0}).id,"h0-cheap");
+  assert.equal(chooseSeller(options,product,{minRating:0}).id,"cheap-h1");
 });
 
 test("connection type never outranks SLA or price",()=>{
@@ -197,8 +197,24 @@ test("old local ranking controls are no longer persisted by browser settings",()
 });
 
 
-test("userscript has no preferred-seller ranking control or synced field",()=>{
-  assert.doesNotMatch(source,/preferred:/);
-  assert.doesNotMatch(source,/settings\.preferred/);
-  assert.doesNotMatch(source,/cfg\.preferred/);
+test("userscript syncs preferred sellers without adding a local ranking control",()=>{
+  assert.match(source,/preferred:\[\]/);
+  assert.match(source,/settings\.preferred/);
+  assert.match(source,/cfg\.preferred/);
+  assert.doesNotMatch(source,/id="preferred"/);
+});
+
+test("userscript applies Seller Prioritas inside the active rating tier",()=>{
+  const options=[
+    candidate("fallback-priority","Fallback Priority",8000,4.2,"100+","H+0"),
+    candidate("high-normal","High Normal",9000,4.9,"100+","H+0"),
+    candidate("high-priority","High Priority",10000,4.6,"100+","H+1")
+  ];
+  assert.equal(chooseSeller(options,product,{minRating:4,preferred:["Fallback Priority","High Priority"],priceTolerancePercent:20}).id,"high-priority");
+});
+
+test("userscript falls back to rating 4.0-4.49 when no 4.5+ candidate survives",()=>{
+  const over=candidate("high-over","High Over",13000,4.9,"100+","H+0");
+  const fallback=candidate("fallback","Fallback",9000,4.2,"100+","H+0");
+  assert.equal(chooseSeller([over,fallback],product,{minRating:4}).id,"fallback");
 });
