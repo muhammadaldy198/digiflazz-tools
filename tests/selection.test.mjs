@@ -113,7 +113,7 @@ test("catalog metadata resolves Digiflazz category, brand, and type IDs to names
 });
 
 
-test("auto-switch priority is rating 4-5, then SLA, then cheapest price", () => {
+test("auto-switch uses rating 4.5-5 before fallback, then SLA and price", () => {
   const product = { max_price: 0 };
   const rows = [
     { seller_id:"bad-rating", seller_name:"Bad Rating", price:8000, rating:3.99, review_count:"5000", stock:999, unlimited_stock:1, connection:"IP", sla:"H+0", description:"", seller_status:1 },
@@ -124,10 +124,10 @@ test("auto-switch priority is rating 4-5, then SLA, then cheapest price", () => 
   const config = { minRating:0, minReviews:0, priceCap:0, weights:{price:0,connection:100,sla:0,stock:0} };
   const result = rank(product, rows, [], null, config, null);
   assert.equal(result.find(x=>x.seller_id==="bad-rating").eligible,false);
-  assert.equal(result[0].seller_id,"h0-cheapest");
-  assert.equal(result[0].sla_days,0);
-  assert.equal(result[1].seller_id,"h0-expensive");
-  assert.equal(result[2].seller_id,"cheap-h1");
+  assert.equal(result[0].seller_id,"cheap-h1");
+  assert.equal(result[0].rating_tier,1);
+  assert.equal(result[1].seller_id,"h0-cheapest");
+  assert.equal(result[2].seller_id,"h0-expensive");
 });
 
 test("SLA parser prefers resolution SLA and ignores complaint acceptance horizon",()=>{
@@ -141,7 +141,7 @@ test("unknown SLA is a last-resort fallback after any known SLA",()=>{
   const product={max_price:0};
   const rows=[
     {seller_id:"unknown-cheap",seller_name:"Unknown Cheap",price:7000,rating:5,review_count:"100",stock:10,unlimited_stock:0,sla:"",seller_status:1},
-    {seller_id:"known-h2",seller_name:"Known H2",price:9000,rating:4.2,review_count:"100",stock:10,unlimited_stock:0,sla:"SLA H+2, maks komplain H+7",seller_status:1}
+    {seller_id:"known-h2",seller_name:"Known H2",price:9000,rating:4.8,review_count:"100",stock:10,unlimited_stock:0,sla:"SLA H+2, maks komplain H+7",seller_status:1}
   ];
   const config={minRating:4,minReviews:0,priceCap:0,weights:{price:40,connection:30,sla:20,stock:10}};
   const result=rank(product,rows,[],null,config,null);
@@ -154,7 +154,7 @@ test("when all eligible sellers have unknown SLA, choose the cheapest",()=>{
   const product={max_price:0};
   const rows=[
     {seller_id:"u2",seller_name:"Unknown 2",price:9000,rating:4.5,review_count:"100",stock:10,unlimited_stock:0,sla:"maks penerimaan komplain H+7",seller_status:1},
-    {seller_id:"u1",seller_name:"Unknown 1",price:8000,rating:4.1,review_count:"100",stock:10,unlimited_stock:0,sla:"",seller_status:1}
+    {seller_id:"u1",seller_name:"Unknown 1",price:8000,rating:4.6,review_count:"100",stock:10,unlimited_stock:0,sla:"",seller_status:1}
   ];
   const config={minRating:4,minReviews:0,priceCap:0,weights:{price:40,connection:30,sla:20,stock:10}};
   const result=rank(product,rows,[],null,config,null);
@@ -219,7 +219,7 @@ test("SLA remains higher priority than the 2 percent price band",()=>{
   const product={max_price:0};
   const rows=[
     {seller_id:"h1-perfect",seller_name:"H1 Perfect",price:9000,rating:5,review_count:"5000+",stock:10,unlimited_stock:0,sla:"H+1",seller_status:1},
-    {seller_id:"h0-good",seller_name:"H0 Good",price:10000,rating:4.1,review_count:"10+",stock:10,unlimited_stock:0,sla:"H+0",seller_status:1}
+    {seller_id:"h0-good",seller_name:"H0 Good",price:10000,rating:4.6,review_count:"10+",stock:10,unlimited_stock:0,sla:"H+0",seller_status:1}
   ];
   const result=rank(product,rows,[],null,{minRating:4,minReviews:0,priceCap:0,priceTolerancePercent:2},null);
   assert.equal(result[0].seller_id,"h0-good");
