@@ -1381,7 +1381,7 @@ async function api(req, env, url) {
       const cfg=await settings(env);
       const [c, counts, sellerCount, last, events, verified]=await Promise.all([
         conn(env),attentionSummary(env,cfg),
-        env.DB.prepare("SELECT count(*) total FROM sellers").first(),
+        env.DB.prepare("SELECT count(DISTINCT CASE WHEN json_extract(o.raw,'$.seller_id') IS NOT NULL AND trim(json_extract(o.raw,'$.seller_id'))<>'' THEN 'sid:'||json_extract(o.raw,'$.seller_id') ELSE 'name:'||lower(trim(o.seller_name)) END) total FROM seller_options o JOIN products p ON p.sku=o.sku WHERE p.active=1").first(),
         env.DB.prepare("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").first(),
         env.DB.prepare("SELECT id,level,kind,sku,message,created_at FROM events ORDER BY id DESC LIMIT 8").all(),
         env.DB.prepare("SELECT id FROM switch_history WHERE status='success' AND reason='manual' LIMIT 1").first()
