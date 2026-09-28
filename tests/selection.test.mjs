@@ -813,6 +813,8 @@ test("attention distinguishes a current seller problem from generic no-candidate
   const stateBlock=source.slice(source.indexOf("function attentionActionState"),source.indexOf("function attentionReasons"));
   assert.match(source,/function hasCurrentSellerIssue/);
   assert.match(stateBlock,/return "current-seller"/);
+  assert.match(stateBlock,/return "max-price"/);
+  assert.ok(stateBlock.indexOf('return "current-seller"') < stateBlock.indexOf('return "max-price"'));
   assert.match(stateBlock,/return "no-candidate"/);
   const apiBlock=source.slice(source.indexOf('if (method==="GET" && path==="/api/products")'),source.indexOf("const opt=path.match"));
   assert.match(apiBlock,/status==="current-issue"/);
