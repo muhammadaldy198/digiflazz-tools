@@ -625,7 +625,7 @@ test("materialized and detail attention pass the effective specific rating rule"
 });
 
 test("materialized best candidate means an actual replacement seller",()=>{
-  assert.match(source,/replacement=ranked\.find\(x=>x\.eligible&&String\(x\.seller_id\)!==String\(row\.current_seller_sku_id\)\)/);
+  assert.match(source,/replacement=ranked\.find\(x=>x\.eligible&&String\(x\.seller_id\)!==String\(hydratedRow\.current_seller_sku_id\)\)/);
   assert.match(source,/best_candidate_seller:replacement\?\.seller_name/);
   assert.match(source,/best_candidate_price:replacement\?\.price/);
 });
