@@ -34,6 +34,7 @@ if (!html.includes('value="cooldown"') || !html.includes('value="blocked-max"') 
 }
 if (!html.includes("Status Auto Switch")) throw Error("Product detail must show Auto Switch attention state");
 
+if (!html.includes('data-action="run-auto">Switch sekarang</button>')) throw Error("Ringkasan must expose immediate Switch sekarang action");
 if (!html.includes("Scan lain masih berjalan")) throw Error("Manual scan must explain single-flight skip");
 if (!html.includes("d.skipped")) throw Error("Manual scan must handle already-running response");
 
