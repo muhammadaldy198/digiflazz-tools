@@ -691,6 +691,16 @@ test("legacy global seller rules are ignored",()=>{
 });
 
 
+test("catalog cleanup skips unresolved product operations and removes dependent operational state",()=>{
+  const block=source.slice(source.indexOf("const stale=await env.DB.prepare"),source.indexOf("ensureScanBudget(deadlineMs);",source.indexOf("const stale=await env.DB.prepare")));
+  assert.match(block,/NOT EXISTS \(SELECT 1 FROM switch_operations op WHERE op\.sku=p\.sku AND op\.status IN \('pending','unknown'\)\)/);
+  assert.match(block,/DELETE FROM product_locks WHERE buyer_sku_code IN/);
+  assert.match(block,/DELETE FROM zone_assignments WHERE sku IN/);
+  assert.match(block,/DELETE FROM switch_operations WHERE sku IN/);
+  assert.match(block,/DELETE FROM seller_rules WHERE scope_type='product' AND scope_value IN/);
+  assert.ok(block.indexOf("DELETE FROM switch_operations WHERE sku IN") < block.indexOf("DELETE FROM products WHERE sku IN"));
+});
+
 test("seller option refresh replaces stale cached options for a SKU",()=>{
   const block=source.slice(source.indexOf("async function refreshOptions"),source.indexOf("async function refreshAttentionCoverage"));
   assert.match(block,/DELETE FROM seller_options WHERE sku=\?/);
