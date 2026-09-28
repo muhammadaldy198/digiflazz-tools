@@ -5,7 +5,7 @@ const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8"
 const scanMigration = readFileSync(new URL("../migrations/0007_scan_single_flight.sql", import.meta.url), "utf8");
 const sellerRejectionMigration = readFileSync(new URL("../migrations/0008_seller_rejections.sql", import.meta.url), "utf8");
 const uiSource = readFileSync(new URL("../src/ui.html", import.meta.url), "utf8");
-const { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct, maxPriceBlockedReplacement } = await import("data:text/javascript," + encodeURIComponent(source));
+const { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct, maxPriceBlockedReplacement, effectiveMinRating } = await import("data:text/javascript," + encodeURIComponent(source));
 
 test("seller filtering rejects blocked, expensive, and out of stock candidates", () => {
   const product = { max_price: 11000 };
@@ -342,6 +342,16 @@ test("same-SLA better quality within ranked rules becomes actionable attention",
   assert.ok(reasons.includes("Rating lebih baik tersedia (5)"));
 });
 
+test("specific rating override is also reflected in current-seller attention",()=>{
+  const rule={min_rating:4.8};
+  assert.equal(effectiveMinRating(rule,{minRating:4}),4.8);
+  const row={active:1,seller_name:"Current",seller_active:1,price:10000,max_price:12000,stock:10,unlimited_stock:0,option_count:2,current_option_seller_id:"x",current_rating:4.5,current_sla:"H+0"};
+  const current={seller_id:"x",rating:4.5,review_value:30,price:10000,sla_days:0,eligible:false};
+  const best={seller_id:"y",rating:4.9,review_value:30,price:10100,sla_days:0,eligible:true};
+  const reasons=attentionReasons(row,{minRating:4},new Date(),{current,best,minRating:4.8});
+  assert.ok(reasons.includes("Rating < 4.8"));
+});
+
 test("product-specific rule wins over broader specific rule for attention ranking",()=>{
   const product={sku:"ml5",product_type:"Umum",brand:"MOBILE LEGENDS",category:"Games"};
   const rules=[
@@ -599,6 +609,16 @@ test("attention materialization excludes a recently rejected seller target",()=>
   assert.match(source,/op\.started_at AS operation_started_at/);
   assert.match(source,/Date\.now\(\)-rejectedAt<24\*3600000/);
   assert.match(source,/const policyOptions=options\.filter\(x=>\(!rejectedId\|\|String\(x\.seller_id\)!==rejectedId\)&&!persistentRejected\.has\(String\(x\.seller_id\)\)\)/);
+});
+
+test("materialized and detail attention pass the effective specific rating rule",()=>{
+  const attention=source.slice(source.indexOf("async function loadAttentionRows"),source.indexOf("function attentionBreakdown"));
+  assert.match(attention,/minRating:effectiveMinRating\(rule,config\)/);
+  const ranked=source.slice(source.indexOf("async function rankedOptions"),source.indexOf("async function findProductBySku"));
+  assert.match(ranked,/minRating:effectiveMinRating\(rule,config\)/);
+  const detailStart=source.indexOf("const shape=async(d,connectorReady)=>");
+  const detail=source.slice(detailStart,source.indexOf("const lock=path.match",detailStart));
+  assert.match(detail,/minRating:d\.minRating/);
 });
 
 test("materialized best candidate means an actual replacement seller",()=>{
