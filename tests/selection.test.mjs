@@ -719,6 +719,13 @@ test("empty seller refreshes still invalidate attention for recalculation",()=>{
 });
 
 
+test("direct SKU and status edits synchronize the full verified Digiflazz snapshot",()=>{
+  const rename=source.slice(source.indexOf("async function updateBuyerSku"),source.indexOf("async function setBuyerProductStatus"));
+  assert.match(rename,/UPDATE products SET sku=\?,product_id=\?,name=\?,category=\?,brand=\?,product_type=\?,seller_id=\?,seller_name=\?,price=\?,max_price=\?,active=\?,seller_active=\?,stock=\?,unlimited_stock=\?,end_cut_off=\?,raw=\?,nominal_value=\?/);
+  const status=source.slice(source.indexOf("async function setBuyerProductStatus"),source.indexOf("async function deleteBuyerProduct"));
+  assert.match(status,/UPDATE products SET product_id=\?,name=\?,category=\?,brand=\?,product_type=\?,seller_id=\?,seller_name=\?,price=\?,max_price=\?,active=\?,seller_active=\?,stock=\?,unlimited_stock=\?,end_cut_off=\?,raw=\?,nominal_value=\?/);
+});
+
 test("SKU rename clears FK refresh state and preserves seller rejection policy on the new SKU",()=>{
   const block=source.slice(source.indexOf("async function updateBuyerSku"),source.indexOf("async function setBuyerProductStatus"));
   assert.match(block,/SELECT seller_id,seller_name,reason,rejected_at,retry_after,permanent FROM seller_rejections WHERE sku=\?/);
@@ -917,6 +924,14 @@ test("product UI shows exact replacement Max Price without changing it automatic
   assert.ok(uiSource.includes("Kandidat butuh"));
   assert.ok(uiSource.includes('data-action="use-required-max"'));
   assert.ok(uiSource.includes("Tekan Simpan Max Price untuk mengirim ke Digiflazz"));
+});
+
+test("manual switch verification opens an actually actionable product",()=>{
+  assert.ok(uiSource.includes('status:"actionable"'));
+  assert.ok(uiSource.includes("Belum ada SKU dengan kandidat seller yang benar-benar siap dipindahkan"));
+  const start=uiSource.indexOf('if(a==="manual-test")');
+  const end=uiSource.indexOf('if(a==="toggle-auto")',start);
+  assert.doesNotMatch(uiSource.slice(start,end),/status:"issues"/);
 });
 
 test("product UI exposes quick attention filters backed by server status filters",()=>{
