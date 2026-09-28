@@ -397,7 +397,7 @@
       if(a==="reconcile"){
         const p=state.selected;
         const result=await write("/api/products/"+encodeURIComponent(p.sku)+"/reconcile");
-        toast(result.confirmed?"Perubahan terkonfirmasi di Digiflazz.":"Target tidak ditemukan. Periksa produk sebelum mencoba lagi.",!result.confirmed);
+        toast(result.confirmed?"Perubahan terkonfirmasi di Digiflazz dan data produk sudah disinkronkan.":"Target tidak ditemukan; data terbaru sudah disinkronkan. Periksa sebelum mencoba lagi.",!result.confirmed);
         return product(p.sku);
       }
       if(a==="close"){$("modal").hidden=true;return}
