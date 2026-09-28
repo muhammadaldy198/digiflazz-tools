@@ -661,7 +661,7 @@ async function loadAttentionRows(env, config, where="WHERE 1=1", args=[]) {
     const rejectedAt=row.operation_status==="error"&&row.operation_started_at
       ?Date.parse(String(row.operation_started_at).replace(" ","T")+"Z")
       :0;
-    const rejectedId=rejectedAt&&Date.now()-rejectedAt<6*3600000?str(row.operation_target_seller_id):"";
+    const rejectedId=rejectedAt&&Date.now()-rejectedAt<24*3600000?str(row.operation_target_seller_id):"";
     const policyOptions=rejectedId?options.filter(x=>String(x.seller_id)!==rejectedId):options;
     const rule=matchingRuleForProduct(row,rules);
     const ranked=rank(row,policyOptions,preferences,rule,config,zoneBySku.get(row.sku)||null);
@@ -1097,7 +1097,7 @@ async function autoSwitchBatch(env, requestedLimit) {
     try {
       const selection=await rankedOptions(env,sku);
       const current=JSON.parse(selection.product.raw),currentId=String(current.seller_sku_id??"");
-      const rejected=await env.DB.prepare("SELECT target_seller_id FROM switch_operations WHERE sku=? AND status='error' AND started_at > datetime('now','-6 hours')").bind(sku).first();
+      const rejected=await env.DB.prepare("SELECT target_seller_id FROM switch_operations WHERE sku=? AND status='error' AND started_at > datetime('now','-24 hours')").bind(sku).first();
       const rejectedId=str(rejected?.target_seller_id);
       const eligibleOptions=selection.options.filter(o=>o.eligible&&(!rejectedId||String(o.seller_id)!==rejectedId));
       const top=eligibleOptions[0]||null;
@@ -1318,7 +1318,7 @@ async function api(req, env, url) {
         ]);
         const raw=JSON.parse(d.product.raw),currentId=String(raw.seller_sku_id??"");
         const rejectedAt=op?.status==="error"&&op?.started_at?Date.parse(String(op.started_at).replace(" ","T")+"Z"):0;
-        const rejectedId=rejectedAt&&Date.now()-rejectedAt<6*3600000?str(op?.target_seller_id):"";
+        const rejectedId=rejectedAt&&Date.now()-rejectedAt<24*3600000?str(op?.target_seller_id):"";
         const policyOptions=rejectedId?d.options.filter(x=>String(x.seller_id)!==rejectedId):d.options;
         const current=policyOptions.find(x=>String(x.seller_id)===currentId)||null;
         const best=policyOptions.find(x=>x.eligible)||null;
