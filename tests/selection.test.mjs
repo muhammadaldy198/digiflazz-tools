@@ -450,13 +450,13 @@ test("missing product Max Price is flagged and excluded from Auto Switch targets
 });
 
 
-test("overview counts missing per-product Max Price",()=>{
-  assert.match(source,/sum\(CASE WHEN p\.max_price<=0 THEN 1 ELSE 0 END\) missingMaxPrice/);
+test("overview counts missing per-product Max Price for active products",()=>{
+  assert.match(source,/sum\(CASE WHEN p\.active=1 AND p\.max_price<=0 THEN 1 ELSE 0 END\) missingMaxPrice/);
   assert.match(source,/missingMaxPrice:Number\(summary\?\.missingMaxPrice\)\|\|0/);
 });
 
-test("product API exposes missing Max Price filter",()=>{
-  assert.match(source,/status==="missing-max"\)where\+=" AND p\.max_price<=0"/);
+test("product API exposes active missing Max Price filter",()=>{
+  assert.match(source,/status==="missing-max"\)where\+=" AND p\.active=1 AND p\.max_price<=0"/);
 });
 
 test("cooldown is skipped instead of counted as failure",()=>{
