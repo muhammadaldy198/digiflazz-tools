@@ -133,7 +133,7 @@
         '<div class="grid">'+
           metric("Koneksi",d.connection.connected?"Aktif":"Belum aktif",d.connection.lastTestStatus?"HTTP "+d.connection.lastTestStatus:"Sesi terenkripsi di D1")+
           metric("Produk",d.counts.products,"SKU hasil scan")+
-          metric("Perlu perhatian",issues,(issues?("Tanpa kandidat "+(d.counts.attentionStateBreakdown?.tanpaKandidat||0)+" · Terhalang Max Price "+(d.counts.attentionStateBreakdown?.maxPrice||0)+" · Cooldown "+(d.counts.attentionStateBreakdown?.cooldown||0)):"Tidak ada yang terdeteksi")+(d.counts.attentionPending?" · "+d.counts.attentionPending+" menunggu evaluasi":""),"goto-issues")+
+          metric("Perlu perhatian",issues,(issues?("Masalah seller saat ini "+(d.counts.attentionStateBreakdown?.currentSeller||0)+" · Tanpa kandidat "+(d.counts.attentionStateBreakdown?.tanpaKandidat||0)+" · Terhalang Max Price "+(d.counts.attentionStateBreakdown?.maxPrice||0)+" · Cooldown "+(d.counts.attentionStateBreakdown?.cooldown||0)):"Tidak ada yang terdeteksi")+(d.counts.attentionPending?" · "+d.counts.attentionPending+" menunggu evaluasi":""),"goto-issues")+
           metric("Siap Auto Switch",d.counts.autoSwitchReady||0,(d.counts.autoSwitchReady?"Punya kandidat pengganti · cooldown & operasi pending sudah disaring":"Belum ada SKU yang siap dipindahkan otomatis"),"goto-actionable")+
           metric("Max Price kosong",d.counts.missingMaxPrice||0,(d.counts.missingMaxPrice?"Auto Switch diblokir sampai Max Price produk diisi":"Semua produk sudah punya Max Price"),"goto-missing-max")+
           metric("Seller",d.counts.sellers,"Terdata di katalog")+
@@ -170,14 +170,15 @@
         cooldown:"Menunggu cooldown",
         actionable:"Siap Auto Switch",
         "max-price":"Terhalang Max Price",
-        "no-candidate":"Tidak ada kandidat layak",
+        "current-seller":"Masalah seller saat ini",
+        "no-candidate":"Tidak ada kandidat memenuhi syarat",
         ok:"Aktif"
       })[p.attention_state]||(problem(p)?"Perlu perhatian":p.active?"Aktif":"Nonaktif");
     }
     function attentionStateTone(p){
       if(p.attention_state==="actionable"||p.attention_state==="ok")return "good";
       if(["evaluating","pending","cooldown","max-price"].includes(p.attention_state))return "warn";
-      if(p.attention_state==="no-candidate")return "bad";
+      if(["current-seller","no-candidate"].includes(p.attention_state))return "bad";
       return "";
     }
     async function products() {
@@ -187,13 +188,14 @@
         '<div class="toolbar"><input id="search-product" aria-label="Cari produk" placeholder="Cari nama, SKU, brand, kategori" value="'+esc(state.q)+'">'+
         '<select id="filter-category" aria-label="Kategori"><option value="">Semua kategori</option>'+d.categories.map(x=>'<option value="'+esc(x)+'" '+(state.category===x?"selected":"")+'>'+esc(x)+'</option>').join("")+'</select>'+
         '<select id="filter-brand" aria-label="Brand"><option value="">Semua brand</option>'+d.brands.map(x=>'<option value="'+esc(x)+'" '+(state.brand===x?"selected":"")+'>'+esc(x)+'</option>').join("")+'</select>'+
-        '<select id="filter-product" aria-label="Status produk"><option value="all">Semua status</option><option value="active" '+(state.status==="active"?"selected":"")+'>Aktif</option><option value="inactive" '+(state.status==="inactive"?"selected":"")+'>Nonaktif</option><option value="issues" '+(state.status==="issues"?"selected":"")+'>Perlu perhatian</option><option value="actionable" '+(state.status==="actionable"?"selected":"")+'>Siap Auto Switch</option><option value="cooldown" '+(state.status==="cooldown"?"selected":"")+'>Menunggu cooldown</option><option value="blocked-max" '+(state.status==="blocked-max"?"selected":"")+'>Terhalang Max Price</option><option value="no-candidate" '+(state.status==="no-candidate"?"selected":"")+'>Tidak ada kandidat layak</option><option value="missing-max" '+(state.status==="missing-max"?"selected":"")+'>Max Price belum diisi</option><option value="locked" '+(state.status==="locked"?"selected":"")+'>Terkunci</option></select>'+button("Terapkan","search","primary")+'</div>'+
+        '<select id="filter-product" aria-label="Status produk"><option value="all">Semua status</option><option value="active" '+(state.status==="active"?"selected":"")+'>Aktif</option><option value="inactive" '+(state.status==="inactive"?"selected":"")+'>Nonaktif</option><option value="issues" '+(state.status==="issues"?"selected":"")+'>Perlu perhatian</option><option value="actionable" '+(state.status==="actionable"?"selected":"")+'>Siap Auto Switch</option><option value="cooldown" '+(state.status==="cooldown"?"selected":"")+'>Menunggu cooldown</option><option value="blocked-max" '+(state.status==="blocked-max"?"selected":"")+'>Terhalang Max Price</option><option value="current-issue" '+(state.status==="current-issue"?"selected":"")+'>Masalah seller saat ini</option><option value="no-candidate" '+(state.status==="no-candidate"?"selected":"")+'>Tidak ada kandidat memenuhi syarat</option><option value="missing-max" '+(state.status==="missing-max"?"selected":"")+'>Max Price belum diisi</option><option value="locked" '+(state.status==="locked"?"selected":"")+'>Terkunci</option></select>'+button("Terapkan","search","primary")+'</div>'+
         '<div class="controls" style="margin:-2px 0 12px;gap:6px;flex-wrap:wrap">'+
           button("Semua","quick-status:all",state.status==="all"?"primary tiny":"tiny")+
           button("Perlu perhatian","quick-status:issues",state.status==="issues"?"primary tiny":"tiny")+
           button("Siap Auto Switch","quick-status:actionable",state.status==="actionable"?"primary tiny":"tiny")+
           button("Cooldown","quick-status:cooldown",state.status==="cooldown"?"primary tiny":"tiny")+
           button("Terhalang Max Price","quick-status:blocked-max",state.status==="blocked-max"?"primary tiny":"tiny")+
+          button("Masalah seller","quick-status:current-issue",state.status==="current-issue"?"primary tiny":"tiny")+
           button("Tanpa kandidat","quick-status:no-candidate",state.status==="no-candidate"?"primary tiny":"tiny")+
         '</div>'+
         '<p class="hint" style="margin:-4px 0 12px"><strong>Urutan:</strong> brand/game A–Z → nominal terkecil → terbesar. Harga seller tidak menentukan posisi produk. Filter perhatian menjelaskan kenapa SKU bisa atau tidak bisa dipindahkan otomatis.</p>'+
@@ -218,7 +220,7 @@
         (d.operation&&["pending","unknown"].includes(d.operation.status)?'<div class="banner" style="margin-top:12px">Ada perubahan yang hasilnya belum pasti. <button class="button tiny" data-action="reconcile">Periksa ulang di Digiflazz</button></div>':"")+
         '<h3 style="margin-top:20px">Kandidat seller · Rating → SLA → toleransi harga '+esc(d.options?.[0]?.price_tolerance_percent??2)+'%</h3>'+
         (d.options.length?'<div class="table-wrap"><table><thead><tr><th>Seller</th><th>Rating</th><th>SLA</th><th>Harga</th><th>Aturan</th><th>Tindakan</th></tr></thead><tbody>'+d.options.map(o=>'<tr><td class="name">'+(o.eligible&&String(p.current_seller_sku_id)!==String(o.seller_id)&&o.seller_name===p.best_candidate_seller?'<span class="badge good">Kandidat pengganti</span> ':'')+esc(o.seller_name)+'</td><td><strong>'+esc(o.rating??"—")+'</strong> <small>('+esc(o.review_count||"—")+')</small></td><td>'+(o.sla_days<999?'<strong>H+'+esc(o.sla_days)+'</strong>':'<span class="badge warn">Fallback SLA</span>')+'<span class="sku">'+esc(o.sla||"SLA tidak tersedia")+'</span></td><td><strong>'+rupiah(o.price)+'</strong>'+(o.within_price_tolerance?'<span class="sku">Dalam toleransi '+esc(o.price_tolerance_percent)+'% · acuan '+rupiah(o.reference_price)+'</span>':"")+'</td><td>'+badge(o.eligible?"Lolos":o.reasons.join(", "),o.eligible?"good":"bad")+'</td><td><button class="button tiny '+(o.eligible&&d.connectorReady&&String(p.current_seller_sku_id)!==o.seller_id?"primary":"")+'" data-action="switch-seller" data-seller-id="'+esc(o.seller_id)+'" data-seller-name="'+esc(o.seller_name)+'" data-seller-price="'+esc(o.price)+'" '+(!o.eligible||!d.connectorReady||String(p.current_seller_sku_id)===o.seller_id?"disabled":"")+'>Pindah ke seller ini</button></td></tr>').join("")+'</tbody></table></div>':'<div class="empty">Data alternatif seller belum tersedia dari respons Digiflazz.</div>')+
-        '<p class="hint"><strong>Urutan: rating minimal 4 → SLA tercepat → kandidat dalam '+esc(d.options?.[0]?.price_tolerance_percent??2)+'% dari harga termurah → rating tertinggi → ulasan terbanyak → harga termurah.</strong> Status “Terhalang Max Price” berarti ada kandidat yang lolos semua aturan lain tetapi harganya melewati Max Price produk; tools tidak menaikkan Max Price otomatis. “Tidak ada kandidat layak” berarti belum ada pengganti yang lolos seluruh aturan. IP/API/H2H tidak memengaruhi pilihan.</p></div></div>';
+        '<p class="hint"><strong>Urutan: rating minimal 4 → SLA tercepat → kandidat dalam '+esc(d.options?.[0]?.price_tolerance_percent??2)+'% dari harga termurah → rating tertinggi → ulasan terbanyak → harga termurah.</strong> Status “Terhalang Max Price” berarti ada kandidat yang lolos semua aturan lain tetapi harganya melewati Max Price produk; tools tidak menaikkan Max Price otomatis. “Masalah seller saat ini” berarti seller yang dipakai sekarang bermasalah atau berada di bawah syarat minimum dan belum ada pengganti yang lolos. “Tidak ada kandidat memenuhi syarat” berarti belum ada pengganti yang lolos seluruh aturan tanpa masalah seller aktif yang lebih spesifik. IP/API/H2H tidak memengaruhi pilihan.</p></div></div>';
     }
     async function sellers() {
       const d=await api("/api/sellers");
