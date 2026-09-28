@@ -749,7 +749,9 @@ test("overview attention summary exposes operational action-state counts",()=>{
 });
 
 test("product API filters attention by cooldown max-price and no-candidate",()=>{
-  const block=source.slice(source.indexOf('if \(method==="GET" && path==="/api/products"\)'.replace(/\\/g,"\"))>=0?source.indexOf('if (method==="GET" && path==="/api/products")'):0,source.indexOf("const opt=path.match",source.indexOf('/api/products')));
+  const start=source.indexOf('if (method==="GET" && path==="/api/products")');
+  assert.ok(start>=0);
+  const block=source.slice(start,source.indexOf("const opt=path.match",start));
   assert.match(block,/status==="cooldown"/);
   assert.match(block,/status==="blocked-max"/);
   assert.match(block,/status==="no-candidate"/);
