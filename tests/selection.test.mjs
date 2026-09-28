@@ -113,7 +113,7 @@ test("catalog metadata resolves Digiflazz category, brand, and type IDs to names
 });
 
 
-test("auto-switch priority is rating 4-5, then SLA, then cheapest price", () => {
+test("auto-switch uses rating 4.5-5 before fallback, then SLA and price", () => {
   const product = { max_price: 0 };
   const rows = [
     { seller_id:"bad-rating", seller_name:"Bad Rating", price:8000, rating:3.99, review_count:"5000", stock:999, unlimited_stock:1, connection:"IP", sla:"H+0", description:"", seller_status:1 },
@@ -124,10 +124,10 @@ test("auto-switch priority is rating 4-5, then SLA, then cheapest price", () => 
   const config = { minRating:0, minReviews:0, priceCap:0, weights:{price:0,connection:100,sla:0,stock:0} };
   const result = rank(product, rows, [], null, config, null);
   assert.equal(result.find(x=>x.seller_id==="bad-rating").eligible,false);
-  assert.equal(result[0].seller_id,"h0-cheapest");
-  assert.equal(result[0].sla_days,0);
-  assert.equal(result[1].seller_id,"h0-expensive");
-  assert.equal(result[2].seller_id,"cheap-h1");
+  assert.equal(result[0].seller_id,"cheap-h1");
+  assert.equal(result[0].rating_tier,1);
+  assert.equal(result[1].seller_id,"h0-cheapest");
+  assert.equal(result[2].seller_id,"h0-expensive");
 });
 
 test("SLA parser prefers resolution SLA and ignores complaint acceptance horizon",()=>{
@@ -141,7 +141,7 @@ test("unknown SLA is a last-resort fallback after any known SLA",()=>{
   const product={max_price:0};
   const rows=[
     {seller_id:"unknown-cheap",seller_name:"Unknown Cheap",price:7000,rating:5,review_count:"100",stock:10,unlimited_stock:0,sla:"",seller_status:1},
-    {seller_id:"known-h2",seller_name:"Known H2",price:9000,rating:4.2,review_count:"100",stock:10,unlimited_stock:0,sla:"SLA H+2, maks komplain H+7",seller_status:1}
+    {seller_id:"known-h2",seller_name:"Known H2",price:9000,rating:4.8,review_count:"100",stock:10,unlimited_stock:0,sla:"SLA H+2, maks komplain H+7",seller_status:1}
   ];
   const config={minRating:4,minReviews:0,priceCap:0,weights:{price:40,connection:30,sla:20,stock:10}};
   const result=rank(product,rows,[],null,config,null);
@@ -154,7 +154,7 @@ test("when all eligible sellers have unknown SLA, choose the cheapest",()=>{
   const product={max_price:0};
   const rows=[
     {seller_id:"u2",seller_name:"Unknown 2",price:9000,rating:4.5,review_count:"100",stock:10,unlimited_stock:0,sla:"maks penerimaan komplain H+7",seller_status:1},
-    {seller_id:"u1",seller_name:"Unknown 1",price:8000,rating:4.1,review_count:"100",stock:10,unlimited_stock:0,sla:"",seller_status:1}
+    {seller_id:"u1",seller_name:"Unknown 1",price:8000,rating:4.6,review_count:"100",stock:10,unlimited_stock:0,sla:"",seller_status:1}
   ];
   const config={minRating:4,minReviews:0,priceCap:0,weights:{price:40,connection:30,sla:20,stock:10}};
   const result=rank(product,rows,[],null,config,null);
@@ -219,7 +219,7 @@ test("SLA remains higher priority than the 2 percent price band",()=>{
   const product={max_price:0};
   const rows=[
     {seller_id:"h1-perfect",seller_name:"H1 Perfect",price:9000,rating:5,review_count:"5000+",stock:10,unlimited_stock:0,sla:"H+1",seller_status:1},
-    {seller_id:"h0-good",seller_name:"H0 Good",price:10000,rating:4.1,review_count:"10+",stock:10,unlimited_stock:0,sla:"H+0",seller_status:1}
+    {seller_id:"h0-good",seller_name:"H0 Good",price:10000,rating:4.6,review_count:"10+",stock:10,unlimited_stock:0,sla:"H+0",seller_status:1}
   ];
   const result=rank(product,rows,[],null,{minRating:4,minReviews:0,priceCap:0,priceTolerancePercent:2},null);
   assert.equal(result[0].seller_id,"h0-good");
@@ -586,8 +586,8 @@ test("browser helper config is authenticated and mirrors production seller polic
   assert.match(source,/minRating:cfg\.minRating/);
   assert.match(source,/minReviews:cfg\.minReviews/);
   assert.match(source,/priceTolerancePercent:cfg\.priceTolerancePercent/);
-  assert.doesNotMatch(source,/mode==="preferred"/);
-  assert.match(source,/mode==="blocked"/);
+  assert.match(source,/preferred:prefs\.results\.filter\(x=>x\.mode==="preferred"\)/);
+  assert.match(source,/blocked:prefs\.results\.filter\(x=>x\.mode==="blocked"\)/);
 });
 
 test("manual API discovery and one-off service-code API are removed",()=>{
@@ -651,16 +651,39 @@ test("product API exposes the same actionable Auto Switch filter",()=>{
 });
 
 
-test("seller preference API supports only normal and blocked modes",()=>{
-  assert.match(source,/\["blocked","none"\]\.includes\(body\.mode\)/);
-  assert.doesNotMatch(source,/\["preferred","blocked","none"\]/);
-  assert.match(source,/p\.mode='blocked'/);
+test("seller preference API supports normal, preferred, and blocked modes",()=>{
+  assert.match(source,/\["preferred","blocked","none"\]\.includes\(body\.mode\)/);
+  assert.match(source,/mode='preferred'/);
+  assert.match(source,/mode='blocked'/);
 });
 
-test("ranking has no hidden manual preferred-seller tie break",()=>{
-  const rankBlock=source.slice(source.indexOf("function rank("),source.indexOf("function parseNominalToken("));
-  assert.doesNotMatch(rankBlock,/mode==="preferred"|\.preferred/);
-  assert.match(rankBlock,/localeCompare\(str\(b\.seller_name\)/);
+test("ranking applies 4.5+ tier before fallback and Seller Prioritas inside the active tier",()=>{
+  const product={max_price:20000};
+  const rows=[
+    {seller_id:"low-priority",seller_name:"Low Priority",price:9000,rating:4.2,review_count:"100+",stock:10,seller_status:1,sla:"H+0"},
+    {seller_id:"high-normal",seller_name:"High Normal",price:10000,rating:4.8,review_count:"100+",stock:10,seller_status:1,sla:"H+0"},
+    {seller_id:"high-priority",seller_name:"High Priority",price:11000,rating:4.6,review_count:"100+",stock:10,seller_status:1,sla:"H+1"}
+  ];
+  const prefs=[
+    {seller_name:"Low Priority",mode:"preferred"},
+    {seller_name:"High Priority",mode:"preferred"}
+  ];
+  const ranked=rank(product,rows,prefs,null,{minRating:4,minReviews:0,priceTolerancePercent:20},null);
+  assert.equal(ranked[0].seller_id,"high-priority");
+  assert.equal(ranked[0].preferred,true);
+  assert.equal(ranked[0].rating_tier,1);
+  assert.equal(ranked.find(x=>x.seller_id==="low-priority").rating_tier,0);
+});
+
+test("ranking falls back to 4.0-4.49 when no 4.5+ candidate is eligible",()=>{
+  const product={max_price:10000};
+  const rows=[
+    {seller_id:"high-over",seller_name:"High Over",price:11000,rating:4.9,review_count:"100+",stock:10,seller_status:1,sla:"H+0"},
+    {seller_id:"fallback",seller_name:"Fallback",price:9000,rating:4.2,review_count:"100+",stock:10,seller_status:1,sla:"H+0"}
+  ];
+  const ranked=rank(product,rows,[],null,{minRating:4,minReviews:0,priceTolerancePercent:2},null);
+  assert.equal(ranked.find(x=>x.eligible).seller_id,"fallback");
+  assert.equal(ranked.find(x=>x.eligible).active_rating_tier,0);
 });
 
 

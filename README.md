@@ -9,9 +9,9 @@ Dashboard pribadi untuk mengelola katalog dan Auto Switch seller Digiflazz di `h
 - Produk diurutkan berdasarkan brand/game lalu nominal terkecil ke terbesar, bukan berdasarkan harga seller.
 - Max Price hanya memakai **Max Price masing-masing produk Buyer di Digiflazz**. Tidak ada Max Price global atau price cap kedua di tools.
 - Seller wajib lolos rating minimal, status aktif, stok, cut-off, zona, dan Max Price produk.
-- Urutan Auto Switch: **rating minimum → SLA tercepat → toleransi harga → rating → jumlah ulasan → harga**. Jenis koneksi IP/API/H2H tidak memengaruhi ranking.
+- Urutan Auto Switch: **tier rating 4,5–5 → Seller Prioritas → SLA tercepat → toleransi harga → rating → jumlah ulasan → harga**. Rating 4,0–4,49 hanya dipakai bila tidak ada kandidat tier 4,5–5 yang lolos. Jenis koneksi IP/API/H2H tidak memengaruhi ranking.
 - Default production saat ini memakai rating minimal 4 dan toleransi harga 2%.
-- Seller dapat berstatus **Biasa** atau **Blokir**. Mode seller Prioritas sudah dihapus agar tidak ada tie-break tersembunyi di luar algoritma utama.
+- Seller dapat berstatus **Biasa**, **Prioritas**, atau **Blokir**. Prioritas hanya mendahulukan seller di dalam tier rating aktif dan tidak dapat melewati syarat rating minimum, stok, cut-off, Max Price, zona, atau blokir.
 - Aturan khusus dapat diterapkan ke kategori, brand, tipe, atau SKU. Aturan khusus hanya mengubah rating minimal; proteksi stok dan cut-off tetap wajib.
 - Zona memakai pola deskripsi seller dan assignment SKU. Product ID tidak diperlukan.
 - Auto Switch hanya memasukkan SKU yang benar-benar punya kandidat pengganti yang memenuhi semua aturan. Produk bermasalah tanpa kandidat tetap muncul di **Perlu perhatian** tetapi tidak menghabiskan batch otomatis.
@@ -29,7 +29,7 @@ Userscript `extension/digi-select.user.js` adalah pendamping opsional ketika mem
 
 - Versi saat ini: **v2.0**.
 - Berjalan pada `member.digiflazz.com` dan menyinkronkan aturan seller non-rahasia dari `tools.lfamiliastore.my.id`.
-- Yang disinkronkan: rating minimum, ulasan minimum, toleransi harga, dan daftar seller diblokir.
+- Yang disinkronkan: rating minimum, ulasan minimum, toleransi harga, daftar Seller Prioritas, dan daftar seller diblokir.
 - Cookie atau token Digiflazz **tidak** disalin ke userscript melalui endpoint sinkronisasi.
 - Kontrol lokal browser hanya: aktif/nonaktif helper, mode simpan Manual/Otomatis, dan SKU otomatis.
 - Max Price tidak dihitung ulang oleh userscript.

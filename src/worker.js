@@ -475,8 +475,10 @@ function effectiveMinRating(rule,config) {
 }
 function rank(product, rows, prefs, rule, config, zone) {
   const blocked = new Set(prefs.filter(p=>p.mode==="blocked").map(p=>p.seller_name.toLowerCase()));
+  const preferred = new Set(prefs.filter(p=>p.mode==="preferred").map(p=>p.seller_name.toLowerCase()));
   const max = Number(product.max_price)>0 ? Number(product.max_price) : Infinity;
   const minRating=effectiveMinRating(rule,config);
+  const preferredRatingFloor=Math.max(4.5,minRating);
   const tolerance=bounded(config.priceTolerancePercent,0,20,2);
   const mapped=rows.map(x => {
     const reasons = [];
@@ -491,22 +493,39 @@ function rank(product, rows, prefs, rule, config, zone) {
     if (inCutoffWindow(x.start_cut_off,x.end_cut_off)) reasons.push("Sedang cut-off");
     if (zone && !zone.patterns.every(p=>String(x.description||"").toLowerCase().includes(p.toLowerCase()))) reasons.push("Zona tidak cocok");
     const sla_days=slaDays(x.sla);
-    return { ...x, eligible:!reasons.length, reasons, sla_days, review_value:reviews };
+    const rating=Number(x.rating);
+    return {
+      ...x,
+      eligible:!reasons.length,
+      reasons,
+      sla_days,
+      review_value:reviews,
+      preferred:preferred.has(name),
+      rating_tier:Number.isFinite(rating)&&rating>=preferredRatingFloor?1:0
+    };
   });
+  const activeRatingTier=mapped.some(x=>x.eligible&&x.rating_tier===1)?1:0;
   const cheapestBySla=new Map();
-  for(const x of mapped) if(x.eligible) {
+  for(const x of mapped) if(x.eligible&&x.rating_tier===activeRatingTier) {
     const previous=cheapestBySla.get(x.sla_days);
     if(previous==null||Number(x.price)<previous)cheapestBySla.set(x.sla_days,Number(x.price));
   }
   for(const x of mapped) {
-    const reference=cheapestBySla.get(x.sla_days);
+    const reference=x.rating_tier===activeRatingTier?cheapestBySla.get(x.sla_days):null;
     x.reference_price=reference??null;
-    x.within_price_tolerance=!!x.eligible&&reference!=null&&Number(x.price)<=reference*(1+tolerance/100)+1e-9;
+    x.within_price_tolerance=!!x.eligible&&x.rating_tier===activeRatingTier&&reference!=null&&Number(x.price)<=reference*(1+tolerance/100)+1e-9;
     x.price_tolerance_percent=tolerance;
+    x.active_rating_tier=activeRatingTier;
   }
   return mapped.sort((a,b)=>{
     const eligibility=Number(b.eligible)-Number(a.eligible);
     if(eligibility)return eligibility;
+    if(a.eligible&&b.eligible) {
+      const tier=Number(b.rating_tier)-Number(a.rating_tier);
+      if(tier)return tier;
+      const priority=Number(b.preferred)-Number(a.preferred);
+      if(priority)return priority;
+    }
     const sla=Number(a.sla_days)-Number(b.sla_days);
     if(sla)return sla;
     if(a.eligible&&b.eligible) {
@@ -1536,13 +1555,26 @@ async function api(req, env, url) {
     const pending=path.match(/^\/api\/products\/([^/]+)\/reconcile$/);
     if(method==="POST"&&pending)return reply(await reconcile(env,decodeURIComponent(pending[1])));
     if(method==="GET"&&path==="/api/sellers") {
-      const rows=await env.DB.prepare("SELECT s.seller_id,s.name,s.rating,s.review_count,s.product_count,s.invoice,p.mode FROM sellers s LEFT JOIN seller_preferences p ON p.seller_name=s.name AND p.mode='blocked' ORDER BY s.rating DESC,s.name LIMIT 1000").all();
+      const rows=await env.DB.prepare(`SELECT s.seller_id,s.name,s.rating,s.review_count,s.product_count,s.invoice,p.mode
+        FROM sellers s
+        LEFT JOIN (
+          SELECT seller_name,
+            CASE
+              WHEN sum(CASE WHEN mode='blocked' THEN 1 ELSE 0 END)>0 THEN 'blocked'
+              WHEN sum(CASE WHEN mode='preferred' THEN 1 ELSE 0 END)>0 THEN 'preferred'
+              ELSE NULL
+            END AS mode
+          FROM seller_preferences
+          GROUP BY seller_name
+        ) p ON p.seller_name=s.name
+        ORDER BY CASE p.mode WHEN 'preferred' THEN 0 WHEN 'blocked' THEN 2 ELSE 1 END,s.rating DESC,s.name
+        LIMIT 1000`).all();
       return reply({ok:true,sellers:rows.results});
     }
     const pref=path.match(/^\/api\/sellers\/([^/]+)\/preference$/);
     if(method==="POST"&&pref) {
       const body=await getJson(req), name=decodeURIComponent(pref[1]);
-      if(!["blocked","none"].includes(body.mode))throw Error("Pilihan tidak valid.");
+      if(!["preferred","blocked","none"].includes(body.mode))throw Error("Pilihan tidak valid.");
       await env.DB.prepare("DELETE FROM seller_preferences WHERE seller_name=?").bind(name).run();
       if(body.mode!=="none") await env.DB.prepare("INSERT INTO seller_preferences(seller_name,mode) VALUES(?,?)").bind(name,body.mode).run();
       await markAttentionDirty(env);
@@ -1679,6 +1711,7 @@ async function api(req, env, url) {
           minRating:cfg.minRating,
           minReviews:cfg.minReviews,
           priceTolerancePercent:cfg.priceTolerancePercent,
+          preferred:prefs.results.filter(x=>x.mode==="preferred").map(x=>x.seller_name),
           blocked:prefs.results.filter(x=>x.mode==="blocked").map(x=>x.seller_name)
         }
       });
