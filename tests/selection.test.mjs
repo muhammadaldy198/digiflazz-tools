@@ -5,7 +5,7 @@ const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8"
 const scanMigration = readFileSync(new URL("../migrations/0007_scan_single_flight.sql", import.meta.url), "utf8");
 const sellerRejectionMigration = readFileSync(new URL("../migrations/0008_seller_rejections.sql", import.meta.url), "utf8");
 const uiSource = readFileSync(new URL("../src/ui.html", import.meta.url), "utf8");
-const { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct } = await import("data:text/javascript," + encodeURIComponent(source));
+const { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct, maxPriceBlockedReplacement } = await import("data:text/javascript," + encodeURIComponent(source));
 
 test("seller filtering rejects blocked, expensive, and out of stock candidates", () => {
   const product = { max_price: 11000 };
@@ -762,6 +762,15 @@ test("top-level fetch never serves dashboard HTML before Access authorization",(
   assert.ok(authPos>=0&&htmlPos>authPos);
 });
 
+
+test("Max Price blocked replacement follows SLA and 2 percent rating band instead of raw cheapest price",()=>{
+  const rows=[
+    {seller_id:"slow",seller_name:"Slow",price:10000,rating:5,review_value:100,sla_days:2,price_tolerance_percent:2,reasons:["Harga di atas batas"]},
+    {seller_id:"fast-cheap",seller_name:"Fast Cheap",price:11000,rating:4.2,review_value:100,sla_days:0,price_tolerance_percent:2,reasons:["Harga di atas batas"]},
+    {seller_id:"fast-best",seller_name:"Fast Best",price:11100,rating:4.9,review_value:50,sla_days:0,price_tolerance_percent:2,reasons:["Harga di atas batas"]}
+  ];
+  assert.equal(maxPriceBlockedReplacement(rows,"current").seller_id,"fast-best");
+});
 
 test("attention detects replacement blocked only by per-product Max Price",()=>{
   assert.match(source,/function maxPriceBlockedReplacement/);
