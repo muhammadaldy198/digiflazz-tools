@@ -561,19 +561,26 @@ const CURRENT_SELLER_ISSUE_REASONS=[
   "Sedang cut-off"
 ];
 const CURRENT_SELLER_ISSUE_SQL="(a.reasons_json LIKE '%Seller belum dipilih%' OR a.reasons_json LIKE '%Seller OFF%' OR a.reasons_json LIKE '%Seller saat ini tidak ada di kandidat terbaru%' OR a.reasons_json LIKE '%Rating tidak tersedia%' OR a.reasons_json LIKE '%Rating < %' OR a.reasons_json LIKE '%Stok habis%' OR a.reasons_json LIKE '%Sedang cut-off%')";
+const EMERGENCY_SWITCH_SQL="(a.reasons_json LIKE '%Seller belum dipilih%' OR a.reasons_json LIKE '%Seller OFF%' OR a.reasons_json LIKE '%Seller saat ini tidak ada di kandidat terbaru%' OR a.reasons_json LIKE '%Harga di atas max price%' OR a.reasons_json LIKE '%Rating < %' OR a.reasons_json LIKE '%Stok habis%' OR a.reasons_json LIKE '%Sedang cut-off%')";
 function hasCurrentSellerIssue(reasons) {
   return (reasons||[]).some(reason=>CURRENT_SELLER_ISSUE_REASONS.includes(reason)||/^Rating < /i.test(reason));
+}
+function hasEmergencySwitchReason(reasons) {
+  return (reasons||[]).some(reason=>
+    ["Seller belum dipilih","Seller OFF","Seller saat ini tidak ada di kandidat terbaru","Harga di atas max price","Stok habis","Sedang cut-off"].includes(reason)
+    || /^Rating < /i.test(reason)
+  );
 }
 function attentionActionState(row,config) {
   if(Boolean(row.attention_dirty))return "evaluating";
   if(!Boolean(row.needs_attention))return "ok";
   if(["pending","unknown"].includes(str(row.operation_status)))return "pending";
   if(Boolean(row.locked))return "locked";
+  const reasons=Array.isArray(row.attention_reasons)?row.attention_reasons:[];
   const lastMs=row.last_success_switch_at?Date.parse(String(row.last_success_switch_at).replace(" ","T")+"Z"):0;
   const cooldownMs=(Number(config?.cooldownHours)||24)*3600000;
-  if(row.best_candidate_seller&&lastMs&&Date.now()-lastMs<cooldownMs)return "cooldown";
+  if(row.best_candidate_seller&&lastMs&&Date.now()-lastMs<cooldownMs&&!hasEmergencySwitchReason(reasons))return "cooldown";
   if(row.best_candidate_seller)return "actionable";
-  const reasons=Array.isArray(row.attention_reasons)?row.attention_reasons:[];
   if(hasCurrentSellerIssue(reasons))return "current-seller";
   if(reasons.some(x=>/Kandidat lolos aturan tetapi di atas Max Price/i.test(x)))return "max-price";
   return "no-candidate";
@@ -822,9 +829,12 @@ const ACTIONABLE_ATTENTION_FROM=`FROM product_attention a
     AND a.best_candidate_seller IS NOT NULL
     AND l.buyer_sku_code IS NULL
     AND COALESCE(op.status,'') NOT IN ('pending','unknown')
-    AND NOT EXISTS (
-      SELECT 1 FROM switch_history sh
-      WHERE sh.buyer_sku_code=p.sku AND sh.status='success' AND sh.created_at>?
+    AND (
+      ${EMERGENCY_SWITCH_SQL}
+      OR NOT EXISTS (
+        SELECT 1 FROM switch_history sh
+        WHERE sh.buyer_sku_code=p.sku AND sh.status='success' AND sh.created_at>?
+      )
     )`;
 async function actionableAttentionCount(env, config) {
   const row=await env.DB.prepare("SELECT count(*) total "+ACTIONABLE_ATTENTION_FROM).bind(autoSwitchCooldownCutoff(config)).first();
@@ -857,6 +867,7 @@ async function attentionSummary(env, config) {
       sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND ${CURRENT_SELLER_ISSUE_SQL} THEN 1 ELSE 0 END) currentSellerIssue,
       sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NULL AND a.reasons_json NOT LIKE ? AND NOT ${CURRENT_SELLER_ISSUE_SQL} THEN 1 ELSE 0 END) noCandidate,
       sum(CASE WHEN a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NOT NULL
+        AND NOT ${EMERGENCY_SWITCH_SQL}
         AND EXISTS(SELECT 1 FROM switch_history sh WHERE sh.buyer_sku_code=a.sku AND sh.status='success' AND sh.created_at>?)
         THEN 1 ELSE 0 END) cooldown
       FROM product_attention a JOIN products p ON p.sku=a.sku WHERE p.active=1`)
@@ -1083,8 +1094,15 @@ async function switchSeller(env, sku, sellerId, reason, preparedSelection = null
   const cached = JSON.parse(product.raw);
   if (String(current.seller_sku_id) !== String(cached.seller_sku_id) || Number(current.price)!==Number(product.price)) throw Error("Produk berubah di Digiflazz. Pindai ulang sebelum memindahkan seller.");
   if (String(current.seller_sku_id)===sellerId) throw Error("Seller ini sudah dipakai produk.");
-  const recent=await env.DB.prepare("SELECT created_at FROM switch_history WHERE buyer_sku_code=? AND status='success' ORDER BY id DESC LIMIT 1").bind(sku).first();
-  if (reason==="auto" && recent && Date.now()-Date.parse(recent.created_at.replace(" ","T")+"Z") < config.cooldownHours*3600000) throw Error("Produk masih dalam masa jeda perpindahan.");
+  const [recent,attentionRow]=await Promise.all([
+    env.DB.prepare("SELECT created_at FROM switch_history WHERE buyer_sku_code=? AND status='success' ORDER BY id DESC LIMIT 1").bind(sku).first(),
+    reason==="auto"?env.DB.prepare("SELECT reasons_json FROM product_attention WHERE sku=?").bind(sku).first():Promise.resolve(null)
+  ]);
+  let emergency=false;
+  if(attentionRow?.reasons_json) {
+    try { emergency=hasEmergencySwitchReason(JSON.parse(attentionRow.reasons_json)); } catch {}
+  }
+  if (reason==="auto" && !emergency && recent && Date.now()-Date.parse(recent.created_at.replace(" ","T")+"Z") < config.cooldownHours*3600000) throw Error("Produk masih dalam masa jeda perpindahan.");
   const choice = JSON.parse(candidate.raw);
   const choiceId=String(choice.id ?? choice.seller_sku_id ?? "");
   if (choiceId!==sellerId || (choice.status_sellerSku != null && Number(choice.status_sellerSku)!==1) || Number(choice.price)!==candidate.price) throw Error("Data kandidat seller tidak konsisten.");
@@ -1306,11 +1324,11 @@ async function api(req, env, url) {
       if(brand){where+=" AND p.brand=?";args.push(brand)}
       if(status==="issues")where+=" AND a.dirty=0 AND a.needs_attention=1";
       else if(status==="actionable"){
-        where+=" AND a.dirty=0 AND a.needs_attention=1 AND p.active=1 AND p.max_price>0 AND a.best_candidate_seller IS NOT NULL AND l.buyer_sku_code IS NULL AND COALESCE(op.status,'') NOT IN ('pending','unknown') AND NOT EXISTS (SELECT 1 FROM switch_history sh WHERE sh.buyer_sku_code=p.sku AND sh.status='success' AND sh.created_at>?)";
+        where+=" AND a.dirty=0 AND a.needs_attention=1 AND p.active=1 AND p.max_price>0 AND a.best_candidate_seller IS NOT NULL AND l.buyer_sku_code IS NULL AND COALESCE(op.status,'') NOT IN ('pending','unknown') AND ("+EMERGENCY_SWITCH_SQL+" OR NOT EXISTS (SELECT 1 FROM switch_history sh WHERE sh.buyer_sku_code=p.sku AND sh.status='success' AND sh.created_at>?))";
         args.push(cooldownCutoff);
       }
       else if(status==="cooldown"){
-        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NOT NULL AND last_switch.last_success_switch_at>?";
+        where+=" AND a.dirty=0 AND a.needs_attention=1 AND a.best_candidate_seller IS NOT NULL AND NOT "+EMERGENCY_SWITCH_SQL+" AND last_switch.last_success_switch_at>?";
         args.push(cooldownCutoff);
       }
       else if(status==="blocked-max"){

@@ -870,3 +870,26 @@ test("24-hour ordinary rejection backoff remains alongside persistent policy blo
   assert.match(source,/started_at > datetime\('now','-24 hours'\)/);
   assert.match(source,/Date\.now\(\)-rejectedAt<24\*3600000/);
 });
+
+
+test("hard seller failures bypass cooldown while optimization changes still wait",()=>{
+  const stateBlock=source.slice(source.indexOf("function attentionActionState"),source.indexOf("function attentionReasons"));
+  assert.match(source,/function hasEmergencySwitchReason/);
+  assert.match(source,/const EMERGENCY_SWITCH_SQL=/);
+  assert.match(stateBlock,/!hasEmergencySwitchReason\(reasons\)/);
+  const queue=source.slice(source.indexOf("const ACTIONABLE_ATTENTION_FROM"),source.indexOf("async function actionableAttentionCount"));
+  assert.match(queue,/EMERGENCY_SWITCH_SQL/);
+  assert.match(queue,/OR NOT EXISTS/);
+});
+
+test("auto switch runtime bypasses cooldown only for cached hard failures",()=>{
+  const block=source.slice(source.indexOf("async function switchSeller"),source.indexOf("async function autoSwitchBatch"));
+  assert.match(block,/SELECT reasons_json FROM product_attention WHERE sku=\?/);
+  assert.match(block,/emergency=hasEmergencySwitchReason/);
+  assert.match(block,/reason==="auto" && !emergency && recent/);
+});
+
+test("cooldown UI explains emergency seller failures",()=>{
+  assert.ok(uiSource.includes("Cooldown hanya menahan optimasi biasa"));
+  assert.ok(uiSource.includes("Seller OFF, stok habis, cut-off"));
+});
