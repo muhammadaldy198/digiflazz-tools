@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8").replace("const HTML = __HTML__;", "const HTML = '';");
 const scanMigration = readFileSync(new URL("../migrations/0007_scan_single_flight.sql", import.meta.url), "utf8");
+const sellerRejectionMigration = readFileSync(new URL("../migrations/0008_seller_rejections.sql", import.meta.url), "utf8");
 const uiSource = readFileSync(new URL("../src/ui.html", import.meta.url), "utf8");
 const { rank, normalizeProduct, validateSettings, changedProduct, inCutoffWindow, slaDays, validBuyerSku, reviewValue, attentionReasons, parseNominalToken, productNominalValue, productSortCompare, matchingRuleForProduct } = await import("data:text/javascript," + encodeURIComponent(source));
 
@@ -826,4 +827,46 @@ test("attention distinguishes a current seller problem from generic no-candidate
 test("definitive seller rejection backoff lasts 24 hours",()=>{
   assert.match(source,/Date\.now\(\)-rejectedAt<24\*3600000/);
   assert.match(source,/started_at > datetime\('now','-24 hours'\)/);
+});
+
+
+test("seller policy rejection migration persists SKU and seller blocks",()=>{
+  assert.match(sellerRejectionMigration,/CREATE TABLE IF NOT EXISTS seller_rejections/);
+  assert.match(sellerRejectionMigration,/PRIMARY KEY \(sku,seller_id\)/);
+  assert.match(sellerRejectionMigration,/permanent INTEGER NOT NULL DEFAULT 0/);
+});
+
+test("persistent account-policy rejection classifier covers KTP and tax verification",()=>{
+  assert.match(source,/function isPersistentPolicyRejection/);
+  assert.match(source,/administrasi perpajakan/);
+  assert.match(source,/mewajibkan buyer/);
+  assert.match(source,/error\.policyBlock=error\.definitive&&isPersistentPolicyRejection\(detail\)/);
+});
+
+test("policy rejection is stored permanently and excluded from Auto Switch",()=>{
+  assert.match(source,/INSERT INTO seller_rejections\(sku,seller_id,seller_name,reason,permanent,retry_after,rejected_at\)/);
+  assert.match(source,/permanent=1,retry_after=NULL/);
+  assert.match(source,/async function activeSellerRejections/);
+  assert.match(source,/persistentIds=new Set\(persistent\.map/);
+  assert.match(source,/!persistentIds\.has\(String\(o\.seller_id\)\)/);
+});
+
+test("materialized attention and product detail exclude persistent rejected sellers",()=>{
+  const attention=source.slice(source.indexOf("async function loadAttentionRows"),source.indexOf("function attentionBreakdown"));
+  assert.match(attention,/FROM seller_rejections WHERE sku IN/);
+  assert.match(attention,/!persistentRejected\.has\(String\(x\.seller_id\)\)/);
+  const start=source.indexOf("const shape=async(d,connectorReady)=>");
+  const detail=source.slice(start,source.indexOf("const lock=path.match",start));
+  assert.match(detail,/activeSellerRejections\(env,sku\)/);
+  assert.match(detail,/auto_block_reason/);
+});
+
+test("successful manual retry clears persistent seller rejection",()=>{
+  const block=source.slice(source.indexOf("async function switchSeller"),source.indexOf("async function autoSwitchBatch"));
+  assert.match(block,/DELETE FROM seller_rejections WHERE sku=\? AND seller_id=\?/);
+});
+
+test("24-hour ordinary rejection backoff remains alongside persistent policy blocks",()=>{
+  assert.match(source,/started_at > datetime\('now','-24 hours'\)/);
+  assert.match(source,/Date\.now\(\)-rejectedAt<24\*3600000/);
 });
