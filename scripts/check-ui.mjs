@@ -41,3 +41,6 @@ if (!html.includes("d.skipped")) throw Error("Manual scan must handle already-ru
 for (const phrase of ["Diblokir Auto Switch","Penolakan Digiflazz","manual tetap boleh dicoba"]) {
   if (!html.includes(phrase)) throw Error("Missing persistent seller rejection UI: " + phrase);
 }
+
+
+if (!html.includes("Cooldown hanya menahan optimasi biasa")) throw Error("Emergency cooldown explanation missing");
