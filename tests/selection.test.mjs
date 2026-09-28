@@ -658,15 +658,40 @@ test("seller preference API supports normal, preferred, and blocked modes",()=>{
 });
 
 
-test("seller panel aggregates live candidate identities instead of the empty legacy sellers cache",()=>{
+test("seller panel mirrors the live Digiflazz seller directory",()=>{
   const block=source.slice(source.indexOf('if(method==="GET"&&path==="/api/sellers")'),source.indexOf('const pref=path.match',source.indexOf('if(method==="GET"&&path==="/api/sellers")')));
-  assert.match(block,/WITH option_base AS/);
-  assert.match(block,/json_extract\(o\.raw,'\$\.seller_id'\)/);
-  assert.match(block,/count\(DISTINCT sku\) AS product_count/);
-  assert.match(block,/json_extract\(o\.raw,'\$\.rating_qty'\) AS review_count/);
-  assert.match(block,/preference_key/);
-  assert.match(block,/unresolved/);
-  assert.doesNotMatch(block,/SELECT s\.seller_id,s\.name,s\.rating/);
+  assert.match(block,/sellerDirectoryLive\(env\)/);
+  assert.match(block,/cacheSellerDirectory\(env,rows\)/);
+  assert.match(block,/source="live"/);
+  assert.match(block,/source="cache"/);
+  assert.doesNotMatch(block,/seller_options/);
+  assert.doesNotMatch(block,/WITH option_base AS/);
+});
+
+test("seller mirror preserves Digiflazz rating, review and product fields without local aggregation",()=>{
+  const mirrorBlock=source.slice(source.indexOf("function mirrorSeller("),source.indexOf("async function sellerDirectoryLive("));
+  assert.match(mirrorBlock,/rating:x\.review_avg \?\? x\.rating/);
+  assert.match(mirrorBlock,/review_count:x\.rating_qty \?\? x\.review_count/);
+  assert.match(mirrorBlock,/product_count:x\.product_count \?\? x\.total_product/);
+  assert.doesNotMatch(mirrorBlock,/bounded\(/);
+});
+
+test("seller directory requests reuse the captured cURL session and browser request headers",()=>{
+  assert.match(source,/async function sellerDirectoryLive\(env\)/);
+  assert.match(source,/await unseal\(row,env\.SESSION_ENCRYPTION_KEY\)/);
+  assert.match(source,/path="\/api\/v1\/buyer\/seller"/);
+  assert.match(source,/captured\.pathname\.startsWith\("\/api\/v1\/buyer\/seller"\)/);
+  const remoteBlock=source.slice(source.indexOf("async function remote(env"),source.indexOf("async function remoteJson",source.indexOf("async function remote(env")));
+  assert.match(remoteBlock,/origin:"https:\/\/member\.digiflazz\.com"/);
+  assert.match(remoteBlock,/referer:"https:\/\/member\.digiflazz\.com\/buyer-area"/);
+  assert.match(remoteBlock,/headers\["x-requested-with"\] \|\|= "XMLHttpRequest"/);
+});
+
+test("full scan caches only the direct Digiflazz seller directory and does not fabricate seller rows from products",()=>{
+  const scanBlock=source.slice(source.indexOf("async function scan("),source.indexOf("function inCutoffWindow("));
+  assert.match(scanBlock,/sellerDirectoryLive\(env\)/);
+  assert.match(scanBlock,/cacheSellerDirectory\(env,directory\.sellers\)/);
+  assert.doesNotMatch(scanBlock,/products\.map\(x=>str\(x\.seller_name\).*INSERT INTO sellers/s);
 });
 
 test("seller preferences support stable Digiflazz account IDs even when candidate names are masked",()=>{
