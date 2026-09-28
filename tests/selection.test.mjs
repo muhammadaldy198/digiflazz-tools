@@ -1036,3 +1036,10 @@ test("cooldown UI explains emergency seller failures",()=>{
   assert.ok(uiSource.includes("Cooldown hanya menahan optimasi biasa"));
   assert.ok(uiSource.includes("Seller OFF, stok habis, cut-off"));
 });
+
+
+test("production settings enforce at least 10 seller reviews",()=>{
+  assert.match(source,/minRating: 4, minReviews: 10/);
+  assert.match(source,/values\.minReviews = Math\.max\(10, Number\(values\.minReviews\)\|\|0\)/);
+  assert.match(source,/minReviews:\[10,100000\]/);
+});
