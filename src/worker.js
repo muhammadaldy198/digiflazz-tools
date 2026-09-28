@@ -1084,7 +1084,11 @@ async function updateBuyerSku(env,oldSku,newSku) {
     env.DB.prepare("DELETE FROM product_attention WHERE sku=?").bind(oldSku),
     env.DB.prepare("DELETE FROM quality_refresh_state WHERE sku=?").bind(oldSku),
     env.DB.prepare("DELETE FROM seller_rejections WHERE sku=?").bind(oldSku),
-    env.DB.prepare("UPDATE products SET sku=?,raw=?,active=?,seller_active=?,price=?,max_price=?,stock=?,unlimited_stock=?,nominal_value=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(newSku,JSON.stringify(verified),normalized.active,normalized.seller_active,normalized.price,normalized.max_price,normalized.stock,normalized.unlimited_stock,Number.isFinite(productNominalValue(normalized))?productNominalValue(normalized):null,oldSku),
+    env.DB.prepare("UPDATE products SET sku=?,product_id=?,name=?,category=?,brand=?,product_type=?,seller_id=?,seller_name=?,price=?,max_price=?,active=?,seller_active=?,stock=?,unlimited_stock=?,end_cut_off=?,raw=?,nominal_value=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(
+      newSku,normalized.product_id,normalized.name,normalized.category,normalized.brand,normalized.product_type,normalized.seller_id,normalized.seller_name,
+      normalized.price,normalized.max_price,normalized.active,normalized.seller_active,normalized.stock,normalized.unlimited_stock,normalized.end_cut_off,
+      JSON.stringify(verified),Number.isFinite(productNominalValue(normalized))?productNominalValue(normalized):null,oldSku
+    ),
     env.DB.prepare("UPDATE seller_options SET sku=? WHERE sku=?").bind(newSku,oldSku),
     env.DB.prepare("UPDATE product_locks SET buyer_sku_code=? WHERE buyer_sku_code=?").bind(newSku,oldSku),
     env.DB.prepare("UPDATE zone_assignments SET sku=? WHERE sku=?").bind(newSku,oldSku),
@@ -1104,7 +1108,11 @@ async function setBuyerProductStatus(env,sku,active) {
   const verified=await freshProduct(env,sku);
   const normalized=normalizeProduct(verified);
   if(Boolean(normalized.active)!==active)throw Error("Status produk belum terkonfirmasi di Digiflazz. Jangan ulangi sebelum memeriksa produk.");
-  await env.DB.prepare("UPDATE products SET active=?,raw=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(active?1:0,JSON.stringify(verified),sku).run();
+  await env.DB.prepare("UPDATE products SET product_id=?,name=?,category=?,brand=?,product_type=?,seller_id=?,seller_name=?,price=?,max_price=?,active=?,seller_active=?,stock=?,unlimited_stock=?,end_cut_off=?,raw=?,nominal_value=?,last_seen=CURRENT_TIMESTAMP WHERE sku=?").bind(
+    normalized.product_id,normalized.name,normalized.category,normalized.brand,normalized.product_type,normalized.seller_id,normalized.seller_name,
+    normalized.price,normalized.max_price,normalized.active,normalized.seller_active,normalized.stock,normalized.unlimited_stock,normalized.end_cut_off,
+    JSON.stringify(verified),Number.isFinite(productNominalValue(normalized))?productNominalValue(normalized):null,sku
+  ).run();
   await markAttentionDirty(env,[sku]);
   await log(env,"INFO","product-status","Produk "+(active?"diaktifkan":"dinonaktifkan")+" langsung di Digiflazz.",sku);
   return {ok:true,sku,active,verified:true};
