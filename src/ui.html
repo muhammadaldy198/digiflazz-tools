@@ -99,7 +99,7 @@
     const rupiah=n=>"Rp"+Number(n||0).toLocaleString("id-ID");
     const fmt=s=>s?new Date(String(s).replace(" ","T")+"Z").toLocaleString("id-ID",{dateStyle:"short",timeStyle:"short"}):"—";
     const state={view:"overview",bootstrap:null,page:1,q:"",status:"all",category:"",brand:"",selected:null,toastTimer:null,ruleTargets:null,historySku:"",historyStatus:"",historyReason:"",logLevel:"",logKind:"",logSku:"",logQ:""};
-    const names={overview:["Ringkasan","Pantau katalog dan seller Digiflazz."],products:["Produk","Daftar SKU buyer dan status seller."],sellers:["Penjual","Lihat nama seller, rating, ulasan, cakupan produk, dan atur Prioritas/Blokir."],rules:["Aturan","Pengecualian rating minimum untuk kategori, brand, tipe, atau SKU."],zones:["Grup produk","Pisahkan supplier dengan aturan zona."],history:["Perubahan","Riwayat scan, harga, dan perpindahan seller."],logs:["Log sistem","Aktivitas terbaru dari pemindaian dan koneksi."],tools:["Auto Seller Browser","Pendamping browser Digiflazz yang mengikuti aturan seller dari dashboard."],settings:["Pengaturan","Atur pemindaian, penilaian, dan penyimpanan."],connection:["Koneksi","Periksa sesi Digiflazz yang sudah tersimpan."]};
+    const names={overview:["Ringkasan","Pantau katalog dan seller Digiflazz."],products:["Produk","Daftar SKU buyer dan status seller."],sellers:["Penjual","Cermin data seller langsung dari sesi cURL Digiflazz."],rules:["Aturan","Pengecualian rating minimum untuk kategori, brand, tipe, atau SKU."],zones:["Grup produk","Pisahkan supplier dengan aturan zona."],history:["Perubahan","Riwayat scan, harga, dan perpindahan seller."],logs:["Log sistem","Aktivitas terbaru dari pemindaian dan koneksi."],tools:["Auto Seller Browser","Pendamping browser Digiflazz yang mengikuti aturan seller dari dashboard."],settings:["Pengaturan","Atur pemindaian, penilaian, dan penyimpanan."],connection:["Koneksi","Periksa sesi Digiflazz yang sudah tersimpan."]};
     async function api(path,options={}) {
       const res=await fetch(path,{...options,headers:{"content-type":"application/json",...(options.headers||{})}});
       const data=await res.json().catch(()=>({}));
@@ -229,9 +229,8 @@
       document.querySelectorAll("#seller-body tr[data-seller-row]").forEach(row=>{
         const text=(row.dataset.search||"").toLowerCase();
         const rowMode=row.dataset.mode||"none";
-        const unresolved=row.dataset.unresolved==="1";
         const matchText=!q||text.includes(q);
-        const matchMode=mode==="all"||(mode==="unresolved"&&unresolved)||rowMode===mode;
+        const matchMode=mode==="all"||rowMode===mode;
         row.hidden=!(matchText&&matchMode);
         if(!row.hidden)visible++;
       });
@@ -240,35 +239,32 @@
     }
     async function sellers() {
       const d=await api("/api/sellers"),rows=d.sellers||[],summary=d.summary||{};
-      const sellerRows=rows.map(s=>{
-        const unresolved=Number(s.unresolved)===1;
-        const rating=s.rating==null?"—":Number(s.rating).toLocaleString("id-ID",{minimumFractionDigits:1,maximumFractionDigits:2});
-        const detail=unresolved
-          ?'<span class="sku">Nama lengkap belum diekspos Digiflazz · ID seller '+esc(s.seller_account_id||"—")+'</span>'
-          :'<span class="sku">ID seller '+esc(s.seller_account_id||"—")+'</span>';
-        return '<tr data-seller-row="1" data-search="'+esc((s.name||"")+" "+(s.seller_account_id||""))+'" data-mode="'+esc(s.mode||"none")+'" data-unresolved="'+(unresolved?"1":"0")+'">'+
-          '<td><span class="name">'+esc(s.name)+'</span>'+detail+'</td>'+
-          '<td><strong>'+esc(rating)+'</strong></td>'+
+      if(d.warning)message(esc(d.warning),"warn");
+      const sellerRows=rows.map(s=>
+        '<tr data-seller-row="1" data-search="'+esc((s.name||"")+" "+(s.seller_id||""))+'" data-mode="'+esc(s.mode||"none")+'">'+
+          '<td class="name">'+esc(s.name??"—")+'</td>'+
+          '<td>'+esc(s.rating??"—")+'</td>'+
           '<td>'+esc(s.review_count??"—")+'</td>'+
-          '<td>'+esc(s.product_count??0)+'</td>'+
+          '<td>'+esc(s.product_count??"—")+'</td>'+
           '<td><select class="seller-mode" data-key="'+esc(s.preference_key)+'" data-label="'+esc(s.name)+'" aria-label="Pilihan untuk '+esc(s.name)+'">'+
             '<option value="none">Biasa</option><option value="preferred" '+(s.mode==="preferred"?"selected":"")+'>Prioritas</option><option value="blocked" '+(s.mode==="blocked"?"selected":"")+'>Blokir</option>'+
-          '</select></td></tr>';
-      }).join("");
+          '</select></td>'+
+        '</tr>'
+      ).join("");
       $("content").innerHTML=
         '<div class="grid">'+
-          metric("Seller",summary.total??rows.length,"Identitas seller kandidat aktif")+
-          metric("Nama teridentifikasi",summary.named??rows.filter(x=>!Number(x.unresolved)).length,"Nama lengkap yang sudah dapat dipetakan")+
-          metric("Belum teridentifikasi",summary.unresolved??rows.filter(x=>Number(x.unresolved)).length,"Tidak ditebak; ditampilkan dengan ID seller")+
+          metric("Seller",summary.total??rows.length,"Jumlah yang dikirim Digiflazz")+
+          metric("Sumber",d.source==="live"?"Digiflazz langsung":"Cache Digiflazz",d.source==="live"?"Diambil sekarang memakai sesi cURL":"Salinan terakhir dari response Digiflazz")+
+          metric("Endpoint",d.endpoint||"—","Tidak ada agregasi rating/ulasan/produk dari database lokal")+
         '</div>'+
         '<section class="section card">'+
-          '<div class="toolbar"><input id="seller-search" placeholder="Cari nama / ID seller" autocomplete="off">'+
-          '<select id="seller-filter"><option value="all">Semua seller</option><option value="preferred">Prioritas</option><option value="blocked">Diblokir</option><option value="unresolved">Nama belum teridentifikasi</option></select>'+
+          '<div class="toolbar"><input id="seller-search" placeholder="Cari nama seller" autocomplete="off">'+
+          '<select id="seller-filter"><option value="all">Semua seller</option><option value="preferred">Prioritas</option><option value="blocked">Diblokir</option></select>'+
           '<span class="hint">Tampil <strong id="seller-visible">'+esc(rows.length)+'</strong> seller</span></div>'+
           '<div class="table-wrap"><table><thead><tr><th>Penjual</th><th>Rating</th><th>Ulasan</th><th>Produk</th><th>Pilihan</th></tr></thead><tbody id="seller-body">'+
-          (sellerRows||'<tr><td colspan="5" class="empty">Belum ada data kandidat seller. Jalankan Pindai sekarang.</td></tr>')+
+          (sellerRows||'<tr><td colspan="5" class="empty">Digiflazz tidak mengirim data seller.</td></tr>')+
           '</tbody></table></div>'+
-          '<p class="hint">Nama seller disatukan berdasarkan <strong>ID seller Digiflazz</strong>, jadi variasi seperti <strong>AM***</strong> tidak ditampilkan sebagai seller terpisah bila nama lengkapnya sudah pernah terlihat. Jika Digiflazz belum pernah mengekspos nama lengkap seller tersebut, panel menampilkan <strong>Seller + ID</strong> daripada menebak nama. Rating, ulasan, dan jumlah produk diambil dari data kandidat seller aktual. <strong>Prioritas</strong> tetap harus lolos rating minimum, stok, cut-off, Max Price, zona, dan blokir.</p>'+
+          '<p class="hint"><strong>Penjual, Rating, Ulasan, dan Produk ditampilkan sesuai nilai yang dikirim endpoint seller Digiflazz melalui sesi cURL.</strong> Tools tidak menghitung ulang, merata-ratakan, atau mengganti nama seller pada tabel ini. Kolom Pilihan hanya aturan lokal untuk Auto Switch dan tidak mengubah data seller Digiflazz.</p>'+
         '</section>';
     }
     function ruleTargetRows(scope) {
