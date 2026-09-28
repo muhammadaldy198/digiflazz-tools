@@ -3,7 +3,7 @@ const HTML = __HTML__;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const DEFAULTS = {
-  scanEnabled: false, dryRun: true, autoSwitch: false, scanIntervalMinutes: 5,
+  scanEnabled: false, dryRun: true, autoSwitch: false, scanIntervalMinutes: 60,
   minRating: 4, minReviews: 0,
   saveMode: "manual",
   cooldownHours: 24, autoSwitchBatchSize: 5, attentionRefreshBatchSize: 5,
@@ -330,6 +330,9 @@ async function settings(env) {
       try { values[r.key] = JSON.parse(r.value); } catch {}
     }
   }
+  // Legacy databases may still contain the old 5-minute value. Clamp it in memory
+  // so production immediately respects the new hourly minimum without a migration write.
+  values.scanIntervalMinutes=Math.max(60,Number(values.scanIntervalMinutes)||60);
   return values;
 }
 function validateSettings(input, current) {
@@ -339,7 +342,7 @@ function validateSettings(input, current) {
     if (["scanEnabled","dryRun","autoSwitch"].includes(key)) next[key] = bool(value);
     else if (["minRating","minReviews","scanIntervalMinutes","cooldownHours","autoSwitchBatchSize","attentionRefreshBatchSize","priceTolerancePercent"].includes(key)) {
       const limits = {
-        minRating:[4,5],minReviews:[0,100000],scanIntervalMinutes:[5,1440],
+        minRating:[4,5],minReviews:[0,100000],scanIntervalMinutes:[60,1440],
         cooldownHours:[1,720],autoSwitchBatchSize:[1,10],attentionRefreshBatchSize:[1,10],priceTolerancePercent:[0,20]
       };
       next[key] = bounded(value, ...limits[key], current[key]);
@@ -1831,29 +1834,29 @@ export default {
     try {
       await env.DB.prepare("UPDATE scan_runs SET status='error',finished_at=CURRENT_TIMESTAMP,message='Scan lama dianggap berhenti sebelum selesai.' WHERE status='running' AND started_at < datetime('now','-5 minutes')").run();
       const cfg=await settings(env);
-      const last=await env.DB.prepare("SELECT finished_at FROM scan_runs WHERE status='success' ORDER BY id DESC LIMIT 1").first();
-      const lastMs=last?.finished_at?Date.parse(last.finished_at.replace(" ","T")+"Z"):0;
-      const age=lastMs?Date.now()-lastMs:Infinity;
-      const liveAuto=cfg.autoSwitch&&!cfg.dryRun;
-      const scanCadence=cfg.scanIntervalMinutes*60000*(liveAuto?2:1);
 
-      // Never combine a full catalog scan and live auto-switch in the same invocation.
-      // On the Free plan this keeps external/internal subrequests safely separated.
-      if(cfg.scanEnabled && age>=scanCadence) {
-        await scan(env,"cron");
+      // Minute 00: full catalog scan. The configurable interval now has a hard 60-minute minimum.
+      if(event?.cron==="0 * * * *") {
+        if(!cfg.scanEnabled)return;
+        const last=await env.DB.prepare("SELECT finished_at FROM scan_runs WHERE status='success' ORDER BY id DESC LIMIT 1").first();
+        const lastMs=last?.finished_at?Date.parse(last.finished_at.replace(" ","T")+"Z"):0;
+        const age=lastMs?Date.now()-lastMs:Infinity;
+        const scanCadence=Math.max(60,Number(cfg.scanIntervalMinutes)||60)*60000;
+        if(age>=scanCadence)await scan(env,"cron");
         return;
       }
 
-      // Recompute only dirty materialized attention rows; overview/product pages never fan out across all sellers.
-      await refreshAttentionCache(env,cfg,null,100);
-
-      if(liveAuto) {
+      // Minute 30: one Auto Switch batch per hour. Keep it separate from the full scan
+      // so Cloudflare/Digiflazz subrequests stay bounded and database work is predictable.
+      if(event?.cron==="30 * * * *") {
+        const liveAuto=cfg.autoSwitch&&!cfg.dryRun;
+        if(!liveAuto)return;
+        await refreshAttentionCache(env,cfg,null,100);
         try {
           const summary=await autoSwitchBatch(env,cfg.autoSwitchBatchSize);
-          if(summary.examined) await log(env,"INFO","auto-switch","Batch otomatis: "+summary.switched+" pindah, "+summary.noCandidate+" tanpa kandidat, "+summary.skipped+" dilewati, "+summary.failed+" gagal.");
+          if(summary.examined) await log(env,"INFO","auto-switch","Batch otomatis per jam: "+summary.switched+" pindah, "+summary.noCandidate+" tanpa kandidat, "+summary.skipped+" dilewati, "+summary.failed+" gagal.");
         } catch(error) { await log(env,"WARN","auto-switch",error.message); }
         return;
       }
-
     } catch(error) { try { await log(env,"ERROR","cron",error.message); } catch {} }
   }};

@@ -15,7 +15,7 @@ Dashboard pribadi untuk mengelola katalog dan Auto Switch seller Digiflazz di `h
 - Aturan khusus dapat diterapkan ke kategori, brand, tipe, atau SKU. Aturan khusus hanya mengubah rating minimal; proteksi stok dan cut-off tetap wajib.
 - Zona memakai pola deskripsi seller dan assignment SKU. Product ID tidak diperlukan.
 - Auto Switch hanya memasukkan SKU yang benar-benar punya kandidat pengganti yang memenuhi semua aturan. Produk bermasalah tanpa kandidat tetap muncul di **Perlu perhatian** tetapi tidak menghabiskan batch otomatis.
-- Cooldown perpindahan, batch Auto Switch, refresh rating/SLA, dan scan interval dapat dikonfigurasi dari panel.
+- Auto Switch otomatis dijalankan **1x per jam** pada menit 30. Scan penuh dipisah pada menit 00 dan interval scan memiliki minimum 60 menit agar database/request lebih hemat. Cooldown, batch Auto Switch, dan refresh rating/SLA tetap dapat dikonfigurasi dari panel.
 - Hasil HTTP 4xx Digiflazz diklasifikasikan sebagai penolakan pasti. Target seller yang baru ditolak tidak langsung dicoba ulang.
 - Penolakan kebijakan akun yang persisten (misalnya persyaratan KTP/verifikasi administrasi seller) diblokir per SKU+seller dari Auto Switch sampai percobaan manual berhasil.
 - Seller options per SKU direfresh sebagai snapshot terbaru. Opsi seller lama yang sudah hilang di Digiflazz dibuang.

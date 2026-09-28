@@ -140,14 +140,14 @@
         '</div>'+
         '<section class="section grid two">'+
           '<div class="card"><div class="section-head"><h2>Monitor</h2>'+badge(d.settings.scanEnabled?"Aktif":"Berhenti",d.settings.scanEnabled?"good":"")+'</div>'+
-            '<p class="sub">Pemindaian berjalan lewat Cloudflare Cron saat diaktifkan. Interval '+esc(d.settings.scanIntervalMinutes)+' menit.</p>'+
+            '<p class="sub">Pemindaian otomatis dijalankan paling cepat setiap '+esc(Math.max(60,Number(d.settings.scanIntervalMinutes)||60))+' menit. Auto Switch berjalan 1x per jam.</p>'+
             '<div class="controls" style="margin-top:16px">'+button(d.settings.scanEnabled?"Hentikan monitor":"Mulai monitor","monitor","primary")+button("Pindai sekali","scan-now")+'</div>'+
             '<p class="hint">Scan terakhir: '+(scan?fmt(scan.finished_at)+" · "+esc(scan.status)+" · "+esc(scan.total)+" produk":"belum pernah")+'</p>'+
             '<p class="hint">Cakupan rating/SLA: <strong>'+esc(d.counts.qualityKnown)+' / '+esc(d.counts.activeProducts)+'</strong> produk aktif sudah punya data kandidat seller.</p>'+
             '<p class="hint">Cache perhatian: <strong>'+esc(d.counts.attentionFresh)+' / '+esc(d.counts.products)+'</strong> siap'+(d.counts.attentionPending?' · '+esc(d.counts.attentionPending)+' menunggu evaluasi':"")+'. Ringkasan membaca cache ini, bukan seluruh kandidat seller setiap kali halaman dibuka.</p>'+
           '</div>'+
           '<div class="card"><div class="section-head"><h2>Auto Switch</h2>'+badge(d.settings.autoSwitch&&!d.settings.dryRun?"AKTIF":d.liveSwitchAvailable?"SIAP DIAKTIFKAN":"BELUM DIVERIFIKASI",d.settings.autoSwitch&&!d.settings.dryRun?"good":"warn")+'</div>'+
-            '<p class="sub">'+(d.liveSwitchAvailable?"Switch manual sudah terverifikasi. Auto Switch dapat dinyalakan langsung.":"Lakukan 1x switch manual untuk memastikan Digiflazz menerima perubahan seller. Setelah berhasil, Auto Switch bisa dinyalakan.")+'</p>'+
+            '<p class="sub">'+(d.liveSwitchAvailable?"Switch manual sudah terverifikasi. Auto Switch otomatis dijalankan 1x per jam.":"Lakukan 1x switch manual untuk memastikan Digiflazz menerima perubahan seller. Setelah berhasil, Auto Switch bisa dinyalakan dan akan berjalan 1x per jam.")+'</p>'+
             '<div class="controls" style="margin-top:16px">'+
               button("1. Tes Switch Manual","manual-test",d.liveSwitchAvailable?"":"primary")+
               button(d.settings.autoSwitch&&!d.settings.dryRun?"Matikan Auto Switch":"2. Aktifkan Auto Switch","toggle-auto",d.liveSwitchAvailable?"primary":"")+
@@ -314,7 +314,7 @@
       await bootstrap();
       const d=await api("/api/settings"),s=d.settings;
       $("content").innerHTML='<form id="settings-form" class="stack"><div class="grid two"><section class="card"><h2>Monitor & eksekusi</h2><div class="fields two">'+
-        '<div class="field"><label for="interval">Interval scan (menit)</label><input id="interval" name="scanIntervalMinutes" type="number" min="5" max="1440" value="'+esc(s.scanIntervalMinutes)+'"><span class="hint">Saat Auto Switch live, scan penuh dan batch switch dipisah agar subrequest Cloudflare tetap aman.</span></div>'+
+        '<div class="field"><label for="interval">Interval scan (menit)</label><input id="interval" name="scanIntervalMinutes" type="number" min="60" max="1440" value="'+esc(Math.max(60,Number(s.scanIntervalMinutes)||60))+'"><span class="hint">Minimum 60 menit. Scan penuh di menit 00; Auto Switch di menit 30 setiap jam agar penggunaan database dan request lebih hemat.</span></div>'+
         '<div class="field"><label for="attention-refresh">Pembaruan rating/SLA per scan</label><input id="attention-refresh" name="attentionRefreshBatchSize" type="number" min="1" max="10" value="'+esc(s.attentionRefreshBatchSize)+'"><span class="hint">Produk aktif dengan data kandidat seller paling lama diperbarui bergiliran.</span></div>'+
         '<div class="field"><label for="switch-batch">SKU per batch Auto Switch</label><input id="switch-batch" name="autoSwitchBatchSize" type="number" min="1" max="10" value="'+esc(s.autoSwitchBatchSize)+'"><span class="hint">Maksimal jumlah SKU yang diperiksa pada satu batch otomatis.</span></div>'+
         '<div class="field"><label for="cooldown">Cooldown perpindahan (jam)</label><input id="cooldown" name="cooldownHours" type="number" min="1" max="720" value="'+esc(s.cooldownHours)+'"><span class="hint">SKU yang baru berhasil pindah tidak dipindahkan otomatis lagi sebelum masa jeda berakhir.</span></div>'+
