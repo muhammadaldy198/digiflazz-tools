@@ -1,16 +1,16 @@
 name = "digiflazz-tools"
-main = "src/index.js"
+main = "src/recovery.js"
 compatibility_date = "2026-09-26"
 
 [vars]
 ACCESS_TEAM_DOMAIN = "lfamilia.cloudflareaccess.com"
-ACCESS_AUD = "b315d4e58e3385d017b0cb3455fd706e7b036cb7028f3e4388e5cb5f00ea1921"
+ACCESS_AUD = "c5a51d43d0e78e7473ae92453cf9a6b8d9211d69ae51125e0ccbaa84e08474b5"
 
 [triggers]
-crons = ["0 * * * *", "30 * * * *"]
+crons = []
 
 [[d1_databases]]
 binding = "DB"
 database_name = "digiflazz-tools-db"
-database_id = "2ccab1ea-425a-40df-b609-b6988bb9fba6"
+database_id = "a0347f78-fc3c-4663-8a9e-3cb501b4118e"
 migrations_dir = "migrations"
